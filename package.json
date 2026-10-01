@@ -6,9 +6,10 @@
   "description": "Law College Management System",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && npm run check:routes && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
+    "check:routes": "node scripts/check-routes.mjs",
     "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

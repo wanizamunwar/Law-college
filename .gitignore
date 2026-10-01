@@ -35,3 +35,6 @@ Thumbs.db
 api/**/*.js
 api/**/*.d.ts
 api/**/*.js.map
+server/**/*.js
+server/**/*.d.ts
+server/**/*.js.map

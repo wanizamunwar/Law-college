@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 type ApiHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 type Next = (error?: unknown) => void
 
-const API_ENTRY = '/api/[...path].ts'
+const API_ENTRY = '/server/handler.ts'
 
 /**
  * Serves the /api routes during `npm run dev` and `npm run preview`.

@@ -149,11 +149,14 @@ the form on a failed submit.
 ## Project structure
 
 ```
-api/
-├── [...path].ts        Vercel entry — one handler for every route
-└── _lib/               db, auth, routing, route handlers
-db/schema.sql           Authoritative table definitions
-scripts/                Migration runner and password hasher
+api/                      One file per Vercel route; each re-exports the handler
+├── health.ts             -> /api/health
+├── auth/login.ts         -> /api/auth/login
+├── applications/[id]/status.ts  -> /api/applications/:id/status
+└── _lib/                 db, auth, routing, route handlers
+server/handler.ts         The API handler itself, shared by dev and Vercel
+db/schema.sql             Authoritative table definitions
+scripts/                  Migration runner and password hasher
 src/
 ├── components/
 │   ├── applications/   Application detail view
@@ -174,18 +177,68 @@ schema.
 
 Push the repository and import it into Vercel — the framework preset is detected
 automatically. Then add two environment variables under **Settings →
-Environment Variables**:
+Environment Variables** for each environment:
 
 | Variable          | Value                                     |
 | ----------------- | ----------------------------------------- |
 | `DATABASE_URL`    | The Neon connection string                |
 | `SESSION_SECRET`  | The same value used locally, 32+ chars    |
 
+`SESSION_SECRET` signs the session tokens. The API refuses to start without it
+under Vercel, where there is no `.env.local` to fall back to. Generate one with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
 Run `npm run db:migrate` once from a machine with the same `DATABASE_URL` before
 your first deploy, or paste `db/schema.sql` into the Neon SQL editor.
 
 `vercel.json` routes everything except `/api/*` to the SPA, so client-side routes
 such as `/admissions` survive a page reload.
+
+### How the API routes are laid out
+
+Vercel maps **one file per route** out of `api/`, by path:
+
+```
+api/health.ts                    ->  /api/health
+api/auth/login.ts                ->  /api/auth/login
+api/applications/[id]/status.ts  ->  /api/applications/:id/status
+```
+
+Each file is three lines and re-exports the single handler in `server/handler.ts`.
+Vercel decides which file a URL belongs to; the handler then matches the method,
+so a request that reaches the wrong file still gets the API's JSON 404 rather
+than the platform's bare one. Adding a route means adding a file.
+
+**There is no `api/[...path].ts` catch-all, deliberately.** A catch-all in the
+`api/` directory matches only a *single* path segment on Vercel, so every
+multi-segment route — `POST /api/auth/login` included — returns a bare 404 and
+the sign-in form fails with `Request failed (404).` The same catch-all works
+perfectly under the Vite dev server, which is why the breakage was invisible
+until the first deployment. The handler lives in `server/` instead, outside the
+directory Vercel scans for functions.
+
+If you ever see a bodiless 404 from `/api/...`, compare it against
+`npm run preview` and `/api/health` — `Request failed (404).` with no server
+message means the platform answered, not the API.
+
+Deploying from the command line:
+
+```bash
+npm install --global vercel
+vercel login
+vercel link
+vercel env add DATABASE_URL production   # paste the Neon connection string
+vercel env add SESSION_SECRET production # paste the generated secret
+vercel --prod
+```
+
+If you have not yet imported your existing records, run **Settings → Data →
+"Import from this browser"** once, from a browser that still holds them — the
+import is a one-way copy into Postgres, after which the app no longer reads
+browser storage.
 
 ## Design
 

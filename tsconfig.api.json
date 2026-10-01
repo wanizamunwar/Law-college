@@ -23,5 +23,5 @@
     "noImplicitOverride": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["api", "src/types"]
+  "include": ["api", "server", "src/types"]
 }
