@@ -99,6 +99,10 @@ export async function readJson<T>(req: IncomingMessage): Promise<T> {
  *
  * Vercel pre-buffers binary uploads into `req.body`; the dev server does not,
  * so the stream is drained as a fallback.
+ *
+ * An oversized body is drained rather than cut off: destroying the socket
+ * mid-upload makes the client see a dropped connection instead of the 413.
+ * Draining is capped, so a client that never stops sending is still dropped.
  */
 export async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const preloaded = (req as IncomingMessage & { body?: unknown }).body
@@ -107,20 +111,38 @@ export async function readBody(req: IncomingMessage, limit: number): Promise<Buf
   if (typeof preloaded === 'string') return Buffer.from(preloaded)
   if (preloaded instanceof Uint8Array) return Buffer.from(preloaded)
 
+  // Anything past this is not a legitimate upload, it is a runaway stream.
+  const hardCeiling = Math.max(limit * 4, limit + 8 * 1024 * 1024)
+
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
+    let tooLarge = false
+
+    const tooLargeError = (): HttpError =>
+      new HttpError(413, `That request is too large. The limit is ${Math.round(limit / 1024 / 1024)} MB.`)
 
     req.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > limit) {
-        reject(new HttpError(413, 'That file is too large. The limit is 3 MB per document.'))
+
+      if (size > hardCeiling) {
         req.destroy()
+        reject(tooLargeError())
         return
       }
+
+      // Past the limit the bytes are discarded, but the stream is still read
+      // to the end so the client can finish sending and read the 413.
+      if (size > limit) {
+        tooLarge = true
+        chunks.length = 0
+        return
+      }
+
       chunks.push(chunk)
     })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
+
+    req.on('end', () => (tooLarge ? reject(tooLargeError()) : resolve(Buffer.concat(chunks))))
     req.on('error', reject)
   })
 }
@@ -263,19 +285,46 @@ export function handleError(res: ServerResponse, error: unknown): void {
 
   const message = error instanceof Error ? error.message : String(error)
 
+  // Postgres reports the useful part of a constraint violation in `detail`,
+  // not `message`, and the Neon driver keeps the two as separate fields — so
+  // both are searched, and the SQLSTATE is used when it is available.
+  const fields = error instanceof Error ? (error as { detail?: unknown; code?: unknown }) : {}
+  const detail = String(fields.detail ?? '')
+  const code = String(fields.code ?? '')
+  const haystack = `${message} ${detail}`
+
   // Postgres constraint violations are a client problem, not a server fault.
-  if (/duplicate key value violates unique constraint/i.test(message)) {
+  if (code === '23505' || /duplicate key value violates unique constraint/i.test(haystack)) {
     sendJson(res, 409, { error: 'That value is already in use.' })
     return
   }
 
-  if (/violates foreign key constraint/i.test(message)) {
+  if (code === '23503' || /violates foreign key constraint/i.test(haystack)) {
+    // Postgres says which way the constraint failed. On an insert or update the
+    // row we sent points at something that is not there — that is the caller's
+    // mistake. Only a delete can be blocked by rows still pointing at it.
+    const missingTable = /is not present in table "([^"]+)"/i.exec(haystack)?.[1]
+    if (missingTable) {
+      sendJson(res, 400, {
+        error: `That ${singular(missingTable)} no longer exists. Reload the page and try again.`,
+      })
+      return
+    }
+
     sendJson(res, 409, { error: 'That record is still referenced by other records.' })
     return
   }
 
-  if (/violates check constraint/i.test(message)) {
+  if (code === '23514' || /violates check constraint/i.test(haystack)) {
     sendJson(res, 400, { error: 'One of the submitted values is not allowed.' })
+    return
+  }
+
+  if (code === '23502' || /violates not-null constraint/i.test(haystack)) {
+    const column = (error as { column?: unknown }).column
+    sendJson(res, 400, {
+      error: `A required value was missing${column ? ` (${String(column)})` : ''}.`,
+    })
     return
   }
 
@@ -287,6 +336,11 @@ export function handleError(res: ServerResponse, error: unknown): void {
 }
 
 /* ------------------------------------------------------------ input checks --- */
+
+/** "programs" -> "program". Only used for human-readable error messages. */
+function singular(table: string): string {
+  return table.endsWith('ies') ? `${table.slice(0, -3)}y` : table.replace(/s$/, '')
+}
 
 export function requireFields(
   body: Record<string, unknown>,

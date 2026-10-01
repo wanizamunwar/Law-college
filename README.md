@@ -53,7 +53,8 @@ Open http://localhost:5173 and sign in with the credentials you set in
 immediately** from **Settings → My Account**.
 
 The dev server mounts the same API handler that Vercel runs, so `npm run dev`
-talks to the real database without the Vercel CLI.
+talks to the real database without the Vercel CLI. Edits under `api/` are picked
+up on the next request, so changing a route does not need a restart.
 
 ### Other scripts
 

@@ -23,6 +23,7 @@ import {
 import type { Handler } from './http'
 import {
   currentSessionYear,
+  dateOnly,
   iso,
   listApplications,
   listPrograms,
@@ -93,6 +94,14 @@ function buildUpdate(id: string, existing: Record<string, unknown>, patch: Recor
   }
 }
 
+/**
+ * Flattens an application into its columns.
+ *
+ * Every text column below is `NOT NULL`, so a field missing from a partial
+ * update or a legacy import has to become `''` rather than `null` — the browser
+ * data being imported is often incomplete. Only the columns that are genuinely
+ * nullable (a date, a programme reference) may be `null`.
+ */
 function applicationColumns(source: {
   personal: Application['personal']
   academic: Application['academic']
@@ -100,23 +109,24 @@ function applicationColumns(source: {
   address: Application['address']
 }) {
   return {
-    full_name: source.personal.fullName,
-    father_name: source.personal.fatherName,
-    cnic: source.personal.cnic,
+    full_name: asString(source.personal.fullName),
+    father_name: asString(source.personal.fatherName),
+    cnic: asString(source.personal.cnic),
     date_of_birth: toDateColumn(source.personal.dateOfBirth),
-    gender: source.personal.gender,
-    phone: source.personal.phone,
-    email: source.personal.email,
-    previous_qualification: source.academic.previousQualification,
-    institution: source.academic.institution,
-    passing_year: source.academic.passingYear,
-    marks_percentage: source.academic.marksPercentage,
-    program_id: source.program.programId || null,
-    session: source.program.session,
-    address: JSON.stringify(source.address),
+    gender: asString(source.personal.gender),
+    phone: asString(source.personal.phone),
+    email: asString(source.personal.email),
+    previous_qualification: asString(source.academic.previousQualification),
+    institution: asString(source.academic.institution),
+    passing_year: asString(source.academic.passingYear),
+    marks_percentage: asString(source.academic.marksPercentage),
+    program_id: asString(source.program.programId) || null,
+    session: asString(source.program.session),
+    address: JSON.stringify(source.address ?? {}),
   }
 }
 
+/** Same rule as `applicationColumns`: `''` for `NOT NULL` text, `null` only where allowed. */
 function studentFields(source: {
   name: string
   fatherName: string
@@ -124,19 +134,48 @@ function studentFields(source: {
   email: string
   cnic: string
   programId: string
-  admissionDate: string
+  admissionDate: string | null
   status: Student['status']
 }) {
   return {
-    name: source.name,
-    father_name: source.fatherName,
-    phone: source.phone,
-    email: source.email,
-    cnic: source.cnic,
-    program_id: source.programId || null,
+    name: asString(source.name),
+    father_name: asString(source.fatherName),
+    phone: asString(source.phone),
+    email: asString(source.email),
+    cnic: asString(source.cnic),
+    program_id: asString(source.programId) || null,
     admission_date: toDateColumn(source.admissionDate),
-    status: source.status,
+    status: isStudentStatus(source.status) ? source.status : 'active',
   }
+}
+
+function isStudentStatus(value: unknown): value is Student['status'] {
+  return value === 'active' || value === 'inactive' || value === 'graduated' || value === 'on-leave'
+}
+
+/**
+ * Validates a date the user typed.
+ *
+ * `toDateColumn` quietly turns an unreadable date into null, which is right for
+ * a value merged out of an existing row but wrong for input — silently clearing
+ * a date of birth or an admission date loses data the user can see they entered.
+ * So anything supplied is checked here and rejected with a message. An empty
+ * value is not an error; it becomes null, because a `date` column rejects ''.
+ */
+function requireDate(value: unknown, label: string): string | null {
+  if (value === null || value === undefined || asString(value).trim() === '') return null
+
+  const parsed = toDateColumn(value)
+  if (parsed === null) throw badRequest(`${label} is not a valid date.`)
+  return parsed
+}
+
+function requireStudentStatus(value: unknown): Student['status'] {
+  if (value === undefined || value === null || value === '') return 'active'
+  if (!isStudentStatus(value)) {
+    throw badRequest('Status must be active, inactive, graduated or on leave.')
+  }
+  return value
 }
 
 function fetchOne(table: string, columns: string, id: string) {
@@ -421,7 +460,7 @@ export const routes: Array<{
           body.personal.fullName,
           body.personal.fatherName ?? '',
           body.personal.cnic ?? '',
-          toDateColumn(body.personal.dateOfBirth),
+          requireDate(body.personal.dateOfBirth, 'The date of birth'),
           body.personal.gender ?? '',
           body.personal.phone ?? '',
           body.personal.email ?? '',
@@ -457,6 +496,13 @@ export const routes: Array<{
       // A PATCH only carries what changed, so each block is merged onto what is
       // already stored. The status and document columns are left untouched.
       const current = mapApplication(existing)
+
+      // A date the caller is not sending stays as the stored one — validated by
+      // `mapApplication`, so it is already a clean YYYY-MM-DD or empty.
+      if (Object.prototype.hasOwnProperty.call(patch.personal ?? {}, 'dateOfBirth')) {
+        requireDate(patch.personal?.dateOfBirth, 'The date of birth')
+      }
+
       const merged = {
         personal: { ...current.personal, ...(patch.personal ?? {}) },
         academic: { ...current.academic, ...(patch.academic ?? {}) },
@@ -559,8 +605,8 @@ export const routes: Array<{
         email: asString(body.email),
         cnic: asString(body.cnic),
         programId: asString(body.programId),
-        admissionDate: asString(body.admissionDate),
-        status: (body.status as Student['status']) ?? 'active',
+        admissionDate: requireDate(body.admissionDate, 'The admission date'),
+        status: requireStudentStatus(body.status),
       })
 
       const rows = await query(
@@ -639,7 +685,7 @@ export const routes: Array<{
            program_id, admission_date, status
          )
          select $2, $3 || '-' || $1 || '-' || lpad(next_value::text, 4, '0'), $4,
-                $5, $6, $7, $8, $9, $10, $11
+                $5, $6, $7, $8, $9, $10, $11, $12
          from seq
          returning *`,
         [
@@ -679,6 +725,18 @@ export const routes: Array<{
       const pick = (key: string, column: string) =>
         Object.prototype.hasOwnProperty.call(source, key) ? source[key] : existing[column]
 
+      // Only what the caller sent is validated; a date or status already in the
+      // database is trusted, so an untouched field can never fail the save.
+      const admissionDate = Object.prototype.hasOwnProperty.call(source, 'admissionDate')
+        ? requireDate(source.admissionDate, 'The admission date')
+        : dateOnly(existing.admission_date)
+
+      const status = Object.prototype.hasOwnProperty.call(source, 'status')
+        ? requireStudentStatus(source.status)
+        : isStudentStatus(existing.status)
+          ? existing.status
+          : 'active'
+
       const fields = studentFields({
         name: asString(pick('name', 'name')),
         fatherName: asString(pick('fatherName', 'father_name')),
@@ -686,8 +744,8 @@ export const routes: Array<{
         email: asString(pick('email', 'email')),
         cnic: asString(pick('cnic', 'cnic')),
         programId: asString(pick('programId', 'program_id')),
-        admissionDate: String(pick('admissionDate', 'admission_date') ?? '').slice(0, 10),
-        status: pick('status', 'status') as Student['status'],
+        admissionDate,
+        status,
       })
 
       const rows = await query(
@@ -768,8 +826,13 @@ export const routes: Array<{
         uploadedAt: new Date().toISOString(),
       }
 
-      // Replacing an upload clears the previous bytes rather than orphaning them.
-      await query('delete from application_documents where id = $1', [id])
+      // One file per label. The client mints a fresh id every time a file is
+      // picked, so clearing by id alone would orphan the previous upload —
+      // clear every row for this application and label, this id included.
+      await query(
+        'delete from application_documents where application_id = $1 and label = $2',
+        [applicationId, label],
+      )
 
       const rows = await query(
         `insert into application_documents

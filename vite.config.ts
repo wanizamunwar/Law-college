@@ -22,8 +22,14 @@ function apiDevServer(): Plugin {
         if (value !== undefined && process.env[key] === undefined) process.env[key] = value
       }
 
-      const module_ = (await server.ssrLoadModule('/api/[...path].ts')) as { default: ApiHandler }
-      const handle = module_.default
+      // Resolved per request rather than once at startup. Vite invalidates its
+      // SSR module cache when a file changes, so editing the API while the dev
+      // server is running takes effect on the next request instead of needing
+      // a restart.
+      const resolve = async (): Promise<ApiHandler> => {
+        const module_ = (await server.ssrLoadModule('/api/[...path].ts')) as { default: ApiHandler }
+        return module_.default
+      }
 
       server.middlewares.use(
         (req: IncomingMessage, res: ServerResponse, next: () => void) => {
@@ -32,13 +38,15 @@ function apiDevServer(): Plugin {
             return
           }
 
-          handle(req, res).catch((error: unknown) => {
-            server.config.logger.error(String(error))
-            if (!res.headersSent) {
-              res.writeHead(500, { 'content-type': 'application/json' })
-            }
-            res.end(JSON.stringify({ error: 'The development API server failed to respond.' }))
-          })
+          resolve()
+            .then((handle) => handle(req, res))
+            .catch((error: unknown) => {
+              server.config.logger.error(String(error))
+              if (!res.headersSent) {
+                res.writeHead(500, { 'content-type': 'application/json' })
+              }
+              res.end(JSON.stringify({ error: 'The development API server failed to respond.' }))
+            })
         },
       )
     },

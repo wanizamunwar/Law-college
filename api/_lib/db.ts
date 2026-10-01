@@ -91,17 +91,63 @@ export function iso(value: unknown): string {
   return new Date(0).toISOString()
 }
 
-/** `date` columns arrive as YYYY-MM-DD strings; empty string when unset. */
-function dateOnly(value: unknown): string {
-  if (!value) return ''
-  if (value instanceof Date) return value.toISOString().slice(0, 10)
+/**
+ * Formats a `date` column as YYYY-MM-DD.
+ *
+ * A `date` has no timezone, and the driver hands it back as a JS Date at *local*
+ * midnight — so `toISOString()` would shift it a day backwards for anywhere east
+ * of UTC (an applicant in Asia/Karachi would see their date of birth as the day
+ * before). Local calendar getters are the only correct reading.
+ */
+export function dateOnly(value: unknown): string {
+  if (value === null || value === undefined || value === '') return ''
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return ''
+    const month = String(value.getMonth() + 1).padStart(2, '0')
+    const day = String(value.getDate()).padStart(2, '0')
+    return `${value.getFullYear()}-${month}-${day}`
+  }
   return String(value).slice(0, 10)
 }
 
-/** A `date` column gets null, not '', so Postgres does not reject it. */
-export function toDateColumn(value: string | null | undefined): string | null {
-  if (!value) return null
-  return String(value).slice(0, 10)
+/**
+ * Normalises a value for a `date` column.
+ *
+ * `dateOnly` reads a date out of a row, and the driver hands those back as JS
+ * Date objects — so a value merged from an existing row is not a string and
+ * `String(value).slice(0, 10)` would yield "Wed Oct 01" rather than a date.
+ * Anything that cannot be read as a real calendar date becomes null: a `date`
+ * column takes null, and silently dropping an unreadable date beats failing the
+ * whole save. User-supplied dates are validated before they get here, so this
+ * only ever has to cope with values the database itself produced.
+ */
+export function toDateColumn(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+
+  // Read a Date with local getters, for the same reason `dateOnly` does.
+  if (value instanceof Date) return dateOnly(value) || null
+
+  if (typeof value !== 'string') return null
+
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const [year, month, day] = trimmed.slice(0, 10).split('-').map(Number)
+
+    // JavaScript rolls 31 February over to 2 March; Postgres rejects it. Check
+    // the round trip so an impossible date is caught before it reaches the wire.
+    const probe = new Date(Date.UTC(year, month - 1, day))
+    const real =
+      probe.getUTCFullYear() === year &&
+      probe.getUTCMonth() === month - 1 &&
+      probe.getUTCDate() === day
+
+    return real ? trimmed.slice(0, 10) : null
+  }
+
+  const parsed = new Date(trimmed)
+  return Number.isNaN(parsed.getTime()) ? null : dateOnly(parsed) || null
 }
 
 function record(value: unknown): Record<string, unknown> {

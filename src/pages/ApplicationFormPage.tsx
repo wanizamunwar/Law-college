@@ -86,16 +86,15 @@ const CURRENT_YEAR = new Date().getFullYear()
 interface PendingDocument {
   meta: DocumentMeta | null
   file: File | null
-  existingId: string | null
 }
 
 type DocumentSlots = Record<DocumentMeta['label'], PendingDocument>
 
 const emptySlots = (): DocumentSlots => ({
-  photograph: { meta: null, file: null, existingId: null },
-  cnic: { meta: null, file: null, existingId: null },
-  academicCertificate: { meta: null, file: null, existingId: null },
-  marksSheet: { meta: null, file: null, existingId: null },
+  photograph: { meta: null, file: null },
+  cnic: { meta: null, file: null },
+  academicCertificate: { meta: null, file: null },
+  marksSheet: { meta: null, file: null },
 })
 
 /* ------------------------------------------------------------------ */
@@ -142,7 +141,7 @@ export function ApplicationFormPage() {
     if (!existing) return emptySlots()
     return (Object.keys(existing.documents) as DocumentMeta['label'][]).reduce(
       (acc, label) => {
-        acc[label] = { meta: existing.documents[label], file: null, existingId: null }
+        acc[label] = { meta: existing.documents[label], file: null }
         return acc
       },
       emptySlots(),
@@ -224,7 +223,7 @@ export function ApplicationFormPage() {
       size: file.size,
       uploadedAt: new Date().toISOString(),
     }
-    setSlots((prev) => ({ ...prev, [label]: { meta, file, existingId: null } }))
+    setSlots((prev) => ({ ...prev, [label]: { meta, file } }))
     setErrors((prev) => {
       if (!prev.documents) return prev
       const next = { ...prev }
@@ -234,7 +233,7 @@ export function ApplicationFormPage() {
   }
 
   const handleFileClear = (label: DocumentMeta['label']) => {
-    setSlots((prev) => ({ ...prev, [label]: { meta: null, file: null, existingId: null } }))
+    setSlots((prev) => ({ ...prev, [label]: { meta: null, file: null } }))
   }
 
   /* ------------------- Validation ------------------- */
