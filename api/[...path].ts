@@ -6,9 +6,9 @@
  * database without needing the Vercel CLI.
  */
 
-import { createRouter } from './_lib/http'
-import { currentUser } from './_lib/auth'
-import { routes } from './_lib/routes'
+import { createRouter } from './_lib/http.ts'
+import { currentUser } from './_lib/auth.ts'
+import { routes } from './_lib/routes.ts'
 
 const handle = createRouter(routes, currentUser)
 

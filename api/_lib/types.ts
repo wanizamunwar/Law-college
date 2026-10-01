@@ -11,7 +11,7 @@ import type {
   CollegeProfile,
   Program,
   Student,
-} from '../../src/types/index'
+} from '../../src/types/index.ts'
 
 export type {
   AcademicInfo,
@@ -29,7 +29,7 @@ export type {
   ProgramSelection,
   Student,
   StudentStatus,
-} from '../../src/types/index'
+} from '../../src/types/index.ts'
 
 export type Role = 'admin' | 'registrar' | 'viewer'
 

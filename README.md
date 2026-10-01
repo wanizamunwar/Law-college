@@ -56,11 +56,16 @@ The dev server mounts the same API handler that Vercel runs, so `npm run dev`
 talks to the real database without the Vercel CLI. Edits under `api/` are picked
 up on the next request, so changing a route does not need a restart.
 
+`npm run preview` mounts that handler too. Without it `vite preview` serves only
+`dist/`, every `/api` request returns a bare 404, and the sign-in form fails with
+`Request failed (404).` — the API produces a JSON error body, so a 404 with no
+message means nothing is serving the routes.
+
 ### Other scripts
 
 ```bash
 npm run build       # type-check and build for production
-npm run preview     # serve the production build locally
+npm run preview     # serve the production build locally, API included
 npm run db:migrate  # apply schema.sql and seed the first administrator
 ```
 

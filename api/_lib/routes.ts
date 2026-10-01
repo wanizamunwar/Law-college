@@ -19,8 +19,8 @@ import {
   sendJson,
   asBoolean,
   asString,
-} from './http'
-import type { Handler } from './http'
+} from './http.ts'
+import type { Handler } from './http.ts'
 import {
   currentSessionYear,
   dateOnly,
@@ -36,15 +36,15 @@ import {
   query,
   saveCollege,
   toDateColumn,
-} from './db'
+} from './db.ts'
 import {
   findUserByUsername,
   hashPassword,
   issueToken,
   listUsers,
   verifyPassword,
-} from './auth'
-import { DEFAULT_COLLEGE } from './defaults'
+} from './auth.ts'
+import { DEFAULT_COLLEGE } from './defaults.ts'
 import type {
   Application,
   ApplicationStatus,
@@ -56,7 +56,7 @@ import type {
   SessionUser,
   StaffUser,
   Student,
-} from './types'
+} from './types.ts'
 
 /** Keeps Vercel's request body within its 4.5 MB ceiling. */
 const MAX_DOCUMENT_BYTES = 3 * 1024 * 1024

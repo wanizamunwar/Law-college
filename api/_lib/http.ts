@@ -6,7 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { SessionUser } from './types'
+import type { SessionUser } from './types.ts'
 
 /** Viewers may read; registrars and admins may write. */
 function canWrite(user: SessionUser | null): boolean {

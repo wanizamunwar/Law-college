@@ -8,8 +8,8 @@
 
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { mapUser, query } from './db'
-import type { Role, SessionUser, StaffUser } from './types'
+import { mapUser, query } from './db.ts'
+import type { Role, SessionUser, StaffUser } from './types.ts'
 
 const scrypt = promisify(scryptCallback)
 

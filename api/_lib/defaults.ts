@@ -6,7 +6,7 @@
  * what "empty" looks like.
  */
 
-import type { CollegeProfile, OfficeHours } from './types'
+import type { CollegeProfile, OfficeHours } from './types.ts'
 
 export const EMPTY_OFFICE_HOURS: OfficeHours = {
   monday: '08:30 – 16:00',

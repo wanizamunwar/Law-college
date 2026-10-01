@@ -10,6 +10,10 @@
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true,
+    // Relative imports carry their `.ts` extension so Node can load the handler
+    // directly with native type stripping — that is what lets `npm run preview`
+    // serve the API. Only legal because nothing is emitted here.
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
 
     "strict": true,

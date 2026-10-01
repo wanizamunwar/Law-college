@@ -6,7 +6,7 @@
  */
 
 import { neon } from '@neondatabase/serverless'
-import { HttpError } from './http'
+import { HttpError } from './http.ts'
 import type {
   Application,
   CollegeProfile,
@@ -15,8 +15,8 @@ import type {
   Gender,
   Program,
   Student,
-} from './types'
-import type { Role, StaffUser } from './types'
+} from './types.ts'
+import type { Role, StaffUser } from './types.ts'
 
 type Sql = ReturnType<typeof neon>
 type Row = Record<string, unknown>
