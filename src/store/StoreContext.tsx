@@ -12,92 +12,49 @@ import type {
   ApplicationStatus,
   AppSettings,
   Program,
+  Role,
+  StaffUser,
   Student,
 } from '@/types'
 import {
-  loadApplications,
-  loadPrograms,
-  loadSession,
-  loadSettings,
-  loadStudents,
-  saveApplications,
-  savePrograms,
-  saveSession,
-  saveSettings,
-  saveStudents,
-  clearSession,
-} from '@/lib/repository'
-import type { AuthSession } from '@/lib/repository'
-import { nextSequentialId, randomId } from '@/lib/id'
-import { currentSessionYear } from '@/lib/id'
-import { clearDocuments, deleteDocument } from '@/lib/documentStore'
-import { clearAllStores, storageUsageBytes } from '@/lib/storage'
+  ApiError,
+  createApplicationRequest,
+  createProgramRequest,
+  changeOwnPasswordRequest,
+  createStaffRequest,
+  createStudentRequest,
+  deleteApplicationRequest,
+  deleteProgramRequest,
+  deleteStaffRequest,
+  deleteStudentRequest,
+  fetchBootstrap,
+  importDataRequest,
+  listStaffRequest,
+  promoteToStudentRequest,
+  resetDataRequest,
+  saveSettingsRequest,
+  setApplicationStatusRequest,
+  setStoredToken,
+  signInRequest,
+  signOutRequest,
+  storedToken,
+  updateApplicationRequest,
+  updateProgramRequest,
+  updateStaffRequest,
+  updateStudentRequest,
+  uploadDocumentRequest,
+} from '@/lib/api'
+import type { CreateApplicationInput, CreateStudentInput } from '@/lib/api'
+import { randomId } from '@/lib/id'
+import { buildDemoData } from '@/lib/demoData'
+import { DEFAULT_COLLEGE } from '@/lib/defaults'
+import { clearLegacyData, collectLegacyData, legacyRecordCount } from '@/lib/legacyData'
 
 /* ------------------------------------------------------------------ */
 /* Context shape                                                      */
 /* ------------------------------------------------------------------ */
 
-export interface CreateApplicationInput {
-  personal: Application['personal']
-  academic: Application['academic']
-  program: Application['program']
-  address: Application['address']
-  documents: Application['documents']
-}
-
-interface StoreContextValue {
-  /* Session */
-  session: AuthSession | null
-  signIn: (username: string, password: string) => { ok: boolean; message?: string }
-  signOut: () => void
-
-  /* Data */
-  settings: AppSettings
-  updateSettings: (next: AppSettings) => void
-  updateCollege: (patch: Partial<AppSettings['college']>) => void
-
-  programs: Program[]
-  createProgram: (input: Omit<Program, 'id' | 'createdAt' | 'updatedAt'>) => Program
-  updateProgram: (id: string, patch: Partial<Program>) => void
-  deleteProgram: (id: string) => void
-
-  applications: Application[]
-  createApplication: (input: CreateApplicationInput) => Application
-  updateApplication: (id: string, patch: Partial<Application>) => void
-  setApplicationStatus: (id: string, status: ApplicationStatus, note?: string) => void
-  deleteApplication: (id: string) => void
-
-  students: Student[]
-  createStudent: (input: Omit<Student, 'id' | 'studentNo' | 'createdAt' | 'updatedAt'>) => Student
-  updateStudent: (id: string, patch: Partial<Student>) => void
-  deleteStudent: (id: string) => void
-  promoteToStudent: (applicationId: string) => { ok: boolean; student?: Student; message?: string }
-
-  /* Utilities */
-  programById: (id: string) => Program | undefined
-  applicationById: (id: string) => Application | undefined
-  studentById: (id: string) => Student | undefined
-  storageBytes: number
-  resetAllData: () => void
-  loadDemoData: () => void
-  importData: (payload: ImportPayload) => ImportResult
-}
-
-const StoreContext = createContext<StoreContextValue | null>(null)
-
-const nowIso = () => new Date().toISOString()
-
-/** Shape of an exported backup file. */
-export interface ImportPayload {
-  version?: number
-  programs?: Program[]
-  applications?: Application[]
-  students?: Student[]
-  settings?: {
-    college?: Partial<AppSettings['college']>
-    admin?: { username?: string; displayName?: string }
-  }
-}
+export type StoreStatus = 'loading' | 'ready' | 'error'
 
 export interface ImportResult {
   ok: boolean
@@ -105,42 +62,91 @@ export interface ImportResult {
   counts?: { programs: number; applications: number; students: number }
 }
 
-/** Minimal shape checks so a malformed file is rejected instead of corrupting state. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+interface StoreContextValue {
+  /* Session */
+  status: StoreStatus
+  loadError: string | null
+  /** Signed-in staff member, or null. */
+  me: StaffUser | null
+  /** True when the account may create, edit and delete records. */
+  canEdit: boolean
+  /** True when the account may manage staff and clear the database. */
+  isAdmin: boolean
+  signIn: (username: string, password: string) => Promise<{ ok: boolean; message?: string }>
+  signOut: () => void
+  /** Rotates the signed-in account's password. */
+  changeOwnPassword: (currentPassword: string, newPassword: string) => Promise<void>
+  retry: () => void
+
+  /* Data */
+  settings: AppSettings
+  saveCollege: (college: AppSettings['college']) => Promise<void>
+
+  programs: Program[]
+  createProgram: (input: Omit<Program, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Program>
+  updateProgram: (id: string, patch: Partial<Program>) => Promise<void>
+  deleteProgram: (id: string) => Promise<void>
+
+  applications: Application[]
+  createApplication: (input: CreateApplicationInput) => Promise<Application>
+  updateApplication: (id: string, patch: Partial<Application>) => Promise<void>
+  setApplicationStatus: (id: string, status: ApplicationStatus, note?: string) => Promise<void>
+  deleteApplication: (id: string) => Promise<void>
+  /** Uploads a file to Postgres and returns the metadata to store on the record. */
+  uploadDocument: (
+    applicationId: string,
+    label: Application['documents']['photograph'] extends null ? never : keyof Application['documents'],
+    file: File,
+  ) => Promise<{ id: string; fileName: string; mimeType: string; size: number }>
+
+  students: Student[]
+  createStudent: (input: CreateStudentInput) => Promise<Student>
+  updateStudent: (id: string, patch: Partial<Student>) => Promise<void>
+  deleteStudent: (id: string) => Promise<void>
+  promoteToStudent: (
+    applicationId: string,
+  ) => Promise<{ ok: boolean; student?: Student; message?: string }>
+
+  /* Utilities */
+  programById: (id: string) => Program | undefined
+  applicationById: (id: string) => Application | undefined
+  studentById: (id: string) => Student | undefined
+
+  /* Staff */
+  staff: StaffUser[]
+  loadStaff: () => Promise<void>
+  createStaff: (input: {
+    username: string
+    displayName: string
+    password: string
+    role: Role
+  }) => Promise<void>
+  updateStaff: (
+    id: string,
+    patch: Partial<Pick<StaffUser, 'displayName' | 'role' | 'active'>> & { password?: string },
+  ) => Promise<void>
+  deleteStaff: (id: string) => Promise<void>
+
+  /* Data management */
+  importData: (payload: unknown) => Promise<ImportResult>
+  loadDemoData: () => Promise<ImportResult>
+  resetAllData: () => Promise<void>
+  legacyCount: number
+  migrateLegacyData: () => Promise<ImportResult>
 }
 
-function sanitizePrograms(input: unknown): Program[] {
-  if (!Array.isArray(input)) return []
-  return input.filter(
-    (item): item is Program =>
-      isRecord(item) &&
-      typeof item.id === 'string' &&
-      typeof item.name === 'string' &&
-      typeof item.code === 'string',
-  )
-}
+const StoreContext = createContext<StoreContextValue | null>(null)
 
-function sanitizeApplications(input: unknown): Application[] {
-  if (!Array.isArray(input)) return []
-  return input.filter(
-    (item): item is Application =>
-      isRecord(item) &&
-      typeof item.id === 'string' &&
-      typeof item.applicationNo === 'string' &&
-      isRecord(item.personal),
-  )
-}
+const DEFAULT_SETTINGS: AppSettings = { college: { ...DEFAULT_COLLEGE } }
 
-function sanitizeStudents(input: unknown): Student[] {
-  if (!Array.isArray(input)) return []
-  return input.filter(
-    (item): item is Student =>
-      isRecord(item) &&
-      typeof item.id === 'string' &&
-      typeof item.studentNo === 'string' &&
-      typeof item.name === 'string',
-  )
+/** Shape of an exported backup file. */
+export interface ImportPayload {
+  version?: number
+  exportedAt?: string
+  programs?: Partial<Program>[]
+  applications?: Partial<Application>[]
+  students?: Partial<Student>[]
+  settings?: { college?: Partial<AppSettings['college']> }
 }
 
 /* ------------------------------------------------------------------ */
@@ -148,274 +154,211 @@ function sanitizeStudents(input: unknown): Student[] {
 /* ------------------------------------------------------------------ */
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<AuthSession | null>(() => loadSession())
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
-  const [programs, setPrograms] = useState<Program[]>(() => loadPrograms())
-  const [applications, setApplications] = useState<Application[]>(() => loadApplications())
-  const [students, setStudents] = useState<Student[]>(() => loadStudents())
-  const [storageBytes, setStorageBytes] = useState(() => storageUsageBytes())
+  const [status, setStatus] = useState<StoreStatus>(() =>
+    storedToken() ? 'loading' : 'ready',
+  )
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  // Keep the sidebar counters fresh after any write.
-  const refreshStorage = useCallback(() => {
-    setStorageBytes(storageUsageBytes())
+  const [me, setMe] = useState<StaffUser | null>(null)
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [programs, setPrograms] = useState<Program[]>([])
+  const [applications, setApplications] = useState<Application[]>([])
+  const [students, setStudents] = useState<Student[]>([])
+  const [staff, setStaff] = useState<StaffUser[]>([])
+  const [legacyCount, setLegacyCount] = useState(() => legacyRecordCount())
+
+  /* ------------------------- Loading ------------------------- */
+
+  const load = useCallback(async () => {
+    if (!storedToken()) {
+      setMe(null)
+      setStatus('ready')
+      return
+    }
+
+    setStatus('loading')
+    setLoadError(null)
+
+    try {
+      const data = await fetchBootstrap()
+      setMe(data.user)
+      setSettings({ college: { ...DEFAULT_COLLEGE, ...data.settings.college } })
+      setPrograms(data.programs)
+      setApplications(data.applications)
+      setStudents(data.students)
+      setStatus('ready')
+    } catch (error) {
+      // A 401 clears the token in the API client, so this is a signed-out
+      // state rather than a failure worth showing.
+      if (error instanceof ApiError && error.status === 401) {
+        setMe(null)
+        setStatus('ready')
+        return
+      }
+      setLoadError(
+        error instanceof Error ? error.message : 'The database could not be reached.',
+      )
+      setStatus('error')
+    }
   }, [])
 
   useEffect(() => {
-    refreshStorage()
-  }, [programs, applications, students, settings, refreshStorage])
+    void load()
+  }, [load])
+
+  const retry = useCallback(() => {
+    void load()
+  }, [load])
 
   /* ------------------------- Session ------------------------- */
 
-  const signIn = useCallback(
-    (username: string, password: string) => {
-      const trimmedUser = username.trim()
-      if (!trimmedUser || !password) {
-        return { ok: false, message: 'Enter both your username and password.' }
-      }
+  const signIn = useCallback<StoreContextValue['signIn']>(async (username, password) => {
+    const trimmed = username.trim()
+    if (!trimmed || !password) {
+      return { ok: false, message: 'Enter both your username and password.' }
+    }
 
-      const admin = settings.admin
-      const userMatches = trimmedUser.toLowerCase() === admin.username.toLowerCase()
-      const passwordMatches = password === admin.password
-
-      if (!userMatches || !passwordMatches) {
-        return { ok: false, message: 'Incorrect username or password. Please try again.' }
-      }
-
-      const next: AuthSession = {
-        username: admin.username,
-        displayName: admin.displayName,
-        signedInAt: nowIso(),
-      }
-      saveSession(next)
-      setSession(next)
+    try {
+      const result = await signInRequest(trimmed, password)
+      setStoredToken(result.token)
+      await load()
       return { ok: true }
-    },
-    [settings.admin],
-  )
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : 'Sign in failed. Please try again.',
+      }
+    }
+  }, [load])
 
   const signOut = useCallback(() => {
-    clearSession()
-    setSession(null)
+    void signOutRequest().catch(() => undefined)
+    setStoredToken(null)
+    setMe(null)
+    setPrograms([])
+    setApplications([])
+    setStudents([])
+    setStaff([])
   }, [])
 
-  /* ------------------------ Settings ------------------------- */
-
-  const updateSettings = useCallback((next: AppSettings) => {
-    saveSettings(next)
-    setSettings(next)
-  }, [])
-
-  const updateCollege = useCallback((patch: Partial<AppSettings['college']>) => {
-    setSettings((prev) => {
-      const next = { ...prev, college: { ...prev.college, ...patch } }
-      saveSettings(next)
-      return next
-    })
-  }, [])
-
-  /* ------------------------ Programs ------------------------- */
-
-  const createProgram = useCallback<StoreContextValue['createProgram']>((input) => {
-    const timestamp = nowIso()
-    const program: Program = { ...input, id: randomId(), createdAt: timestamp, updatedAt: timestamp }
-    setPrograms((prev) => {
-      const next = [...prev, program]
-      savePrograms(next)
-      return next
-    })
-    return program
-  }, [])
-
-  const updateProgram = useCallback<StoreContextValue['updateProgram']>((id, patch) => {
-    setPrograms((prev) => {
-      const next = prev.map((program) =>
-        program.id === id ? { ...program, ...patch, id: program.id, updatedAt: nowIso() } : program,
-      )
-      savePrograms(next)
-      return next
-    })
-  }, [])
-
-  const deleteProgram = useCallback<StoreContextValue['deleteProgram']>((id) => {
-    setPrograms((prev) => {
-      const next = prev.filter((program) => program.id !== id)
-      savePrograms(next)
-      return next
-    })
-    // Applications and students keep their historical programId; we leave the
-    // text intact there and display "Program removed" where it no longer exists.
-  }, [])
-
-  /* --------------------- Applications ----------------------- */
-
-  const createApplication = useCallback<StoreContextValue['createApplication']>((input) => {
-    const timestamp = nowIso()
-    let created: Application | null = null
-
-    setApplications((prev) => {
-      const applicationNo = nextSequentialId(
-        'LCM',
-        currentSessionYear(),
-        prev.map((item) => item.applicationNo),
-      )
-      created = {
-        ...input,
-        id: randomId(),
-        applicationNo,
-        status: 'pending',
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
-      const next = [...prev, created]
-      saveApplications(next)
-      return next
-    })
-
-    if (!created) {
-      throw new Error('Unable to create the application.')
-    }
-    return created
-  }, [])
-
-  const updateApplication = useCallback<StoreContextValue['updateApplication']>((id, patch) => {
-    setApplications((prev) => {
-      const next = prev.map((application) =>
-        application.id === id ? { ...application, ...patch, id: application.id, updatedAt: nowIso() } : application,
-      )
-      saveApplications(next)
-      return next
-    })
-  }, [])
-
-  const setApplicationStatus = useCallback<StoreContextValue['setApplicationStatus']>(
-    (id, status, note) => {
-      setApplications((prev) => {
-        const next = prev.map((application) =>
-          application.id === id
-            ? { ...application, status, reviewNote: note ?? application.reviewNote, updatedAt: nowIso() }
-            : application,
-        )
-        saveApplications(next)
-        return next
-      })
+  const changeOwnPassword = useCallback<StoreContextValue['changeOwnPassword']>(
+    async (currentPassword, newPassword) => {
+      await changeOwnPasswordRequest(currentPassword, newPassword)
     },
     [],
   )
 
-  const deleteApplication = useCallback<StoreContextValue['deleteApplication']>((id) => {
-    // Remove any stored document binaries before dropping the metadata.
-    setApplications((prev) => {
-      const target = prev.find((application) => application.id === id)
-      if (target) {
-        Object.values(target.documents).forEach((doc) => {
-          if (doc) void deleteDocument(doc.id)
-        })
-      }
-      const next = prev.filter((application) => application.id !== id)
-      saveApplications(next)
-      return next
-    })
+  const canEdit = me?.role === 'admin' || me?.role === 'registrar'
+  const isAdmin = me?.role === 'admin'
+
+  /* ------------------------ Settings ------------------------- */
+
+  const saveCollege = useCallback<StoreContextValue['saveCollege']>(async (college) => {
+    const result = await saveSettingsRequest(college)
+    setSettings({ college: { ...DEFAULT_COLLEGE, ...result.college } })
   }, [])
 
-  /* ------------------------ Students ------------------------- */
+  /* ------------------------ Programs ------------------------- */
 
-  const createStudent = useCallback<StoreContextValue['createStudent']>((input) => {
-    const timestamp = nowIso()
-    let created: Student | null = null
-
-    setStudents((prev) => {
-      const studentNo = nextSequentialId(
-        'STU',
-        currentSessionYear(),
-        prev.map((item) => item.studentNo),
-      )
-      created = { ...input, id: randomId(), studentNo, createdAt: timestamp, updatedAt: timestamp }
-      const next = [...prev, created]
-      saveStudents(next)
-      return next
-    })
-
-    if (!created) {
-      throw new Error('Unable to create the student record.')
-    }
+  const createProgram = useCallback<StoreContextValue['createProgram']>(async (input) => {
+    const created = await createProgramRequest(input)
+    setPrograms((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
     return created
   }, [])
 
-  const updateStudent = useCallback<StoreContextValue['updateStudent']>((id, patch) => {
-    setStudents((prev) => {
-      const next = prev.map((student) =>
-        student.id === id ? { ...student, ...patch, id: student.id, updatedAt: nowIso() } : student,
-      )
-      saveStudents(next)
-      return next
-    })
+  const updateProgram = useCallback<StoreContextValue['updateProgram']>(async (id, patch) => {
+    const updated = await updateProgramRequest(id, patch)
+    setPrograms((prev) =>
+      prev
+        .map((program) => (program.id === id ? updated : program))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    )
   }, [])
 
-  const deleteStudent = useCallback<StoreContextValue['deleteStudent']>((id) => {
-    setStudents((prev) => {
-      const next = prev.filter((student) => student.id !== id)
-      saveStudents(next)
-      return next
-    })
+  const deleteProgram = useCallback<StoreContextValue['deleteProgram']>(async (id) => {
+    await deleteProgramRequest(id)
+    setPrograms((prev) => prev.filter((program) => program.id !== id))
+  }, [])
+
+  /* --------------------- Applications ----------------------- */
+
+  const createApplication = useCallback<StoreContextValue['createApplication']>(
+    async (input) => {
+      const created = await createApplicationRequest(input)
+      setApplications((prev) => [created, ...prev])
+      return created
+    },
+    [],
+  )
+
+  const updateApplication = useCallback<StoreContextValue['updateApplication']>(
+    async (id, patch) => {
+      const updated = await updateApplicationRequest(id, patch)
+      setApplications((prev) => prev.map((application) => (application.id === id ? updated : application)))
+    },
+    [],
+  )
+
+  const setApplicationStatus = useCallback<StoreContextValue['setApplicationStatus']>(
+    async (id, status, note) => {
+      const updated = await setApplicationStatusRequest(id, status, note)
+      setApplications((prev) => prev.map((application) => (application.id === id ? updated : application)))
+    },
+    [],
+  )
+
+  const deleteApplication = useCallback<StoreContextValue['deleteApplication']>(async (id) => {
+    await deleteApplicationRequest(id)
+    setApplications((prev) => prev.filter((application) => application.id !== id))
+  }, [])
+
+  const uploadDocument = useCallback<StoreContextValue['uploadDocument']>(
+    async (applicationId, label, file) => {
+      const id = randomId()
+      await uploadDocumentRequest(
+        applicationId,
+        { id, label, fileName: file.name, mimeType: file.type || 'application/octet-stream' },
+        file,
+      )
+      return { id, fileName: file.name, mimeType: file.type, size: file.size }
+    },
+    [],
+  )
+
+  /* ------------------------ Students ------------------------- */
+
+  const createStudent = useCallback<StoreContextValue['createStudent']>(async (input) => {
+    const created = await createStudentRequest(input)
+    setStudents((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+    return created
+  }, [])
+
+  const updateStudent = useCallback<StoreContextValue['updateStudent']>(async (id, patch) => {
+    const updated = await updateStudentRequest(id, patch)
+    setStudents((prev) =>
+      prev.map((student) => (student.id === id ? updated : student)).sort((a, b) => a.name.localeCompare(b.name)),
+    )
+  }, [])
+
+  const deleteStudent = useCallback<StoreContextValue['deleteStudent']>(async (id) => {
+    await deleteStudentRequest(id)
+    setStudents((prev) => prev.filter((student) => student.id !== id))
   }, [])
 
   const promoteToStudent = useCallback<StoreContextValue['promoteToStudent']>(
-    (applicationId) => {
-      const application = applications.find((item) => item.id === applicationId)
-
-      if (!application) {
-        return { ok: false, message: 'Application not found.' }
+    async (applicationId) => {
+      try {
+        const student = await promoteToStudentRequest(applicationId)
+        setStudents((prev) => [...prev, student].sort((a, b) => a.name.localeCompare(b.name)))
+        return { ok: true, student }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unable to enrol the student.'
+        // A duplicate is not an error worth alarming about — it is a fact.
+        return { ok: false, message }
       }
-
-      if (application.status !== 'approved') {
-        return { ok: false, message: 'Only approved applications can be enrolled.' }
-      }
-
-      const existing = students.find((student) => student.applicationId === applicationId)
-      if (existing) {
-        return {
-          ok: false,
-          message: `${existing.name} is already enrolled as ${existing.studentNo}.`,
-          student: existing,
-        }
-      }
-
-      let created: Student | null = null
-
-      setStudents((prev) => {
-        const timestamp = nowIso()
-        const studentNo = nextSequentialId(
-          'STU',
-          currentSessionYear(),
-          prev.map((item) => item.studentNo),
-        )
-        created = {
-          id: randomId(),
-          studentNo,
-          applicationId,
-          name: application.personal.fullName,
-          fatherName: application.personal.fatherName,
-          phone: application.personal.phone,
-          email: application.personal.email,
-          cnic: application.personal.cnic,
-          programId: application.program.programId,
-          admissionDate: application.createdAt.slice(0, 10),
-          status: 'active',
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }
-        const next = [...prev, created]
-        saveStudents(next)
-        return next
-      })
-
-      if (!created) {
-        return { ok: false, message: 'Unable to enrol the student.' }
-      }
-
-      return { ok: true, student: created }
     },
-    [applications, students],
+    [],
   )
 
   /* ------------------------ Lookups ------------------------- */
@@ -435,138 +378,169 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [students],
   )
 
-  /* ------------------------- Admin -------------------------- */
+  /* ------------------------- Staff --------------------------- */
 
-  const resetAllData = useCallback(() => {
-    clearAllStores()
-    void clearDocuments()
+  const loadStaff = useCallback(async () => {
+    if (!isAdmin) return
+    const result = await listStaffRequest()
+    setStaff(result.users)
+  }, [isAdmin])
+
+  const createStaff = useCallback<StoreContextValue['createStaff']>(async (input) => {
+    const created = await createStaffRequest(input)
+    setStaff((prev) => [...prev, created])
+  }, [])
+
+  const updateStaff = useCallback<StoreContextValue['updateStaff']>(async (id, patch) => {
+    const updated = await updateStaffRequest(id, patch)
+    setStaff((prev) => prev.map((user) => (user.id === id ? updated : user)))
+
+    // Editing your own account changes what the session is allowed to do.
+    if (updated.id === me?.id) {
+      setMe((prev) => (prev ? { ...prev, ...updated } : prev))
+    }
+  }, [me?.id])
+
+  const deleteStaff = useCallback<StoreContextValue['deleteStaff']>(async (id) => {
+    await deleteStaffRequest(id)
+    setStaff((prev) => prev.filter((user) => user.id !== id))
+  }, [])
+
+  /* -------------------- Data management ---------------------- */
+
+  const importData = useCallback<StoreContextValue['importData']>(async (payload) => {
+    try {
+      const result = await importDataRequest(payload)
+      await load()
+      return {
+        ok: true,
+        message: 'Backup restored.',
+        counts: result.counts,
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : 'The backup could not be read.',
+      }
+    }
+  }, [load])
+
+  const loadDemoData = useCallback<StoreContextValue['loadDemoData']>(async () => {
+    const demo = buildDemoData()
+    return importData({
+      programs: demo.programs,
+      applications: demo.applications,
+      students: demo.students,
+      settings: { college: demo.settings.college },
+    })
+  }, [importData])
+
+  const resetAllData = useCallback<StoreContextValue['resetAllData']>(async () => {
+    await resetDataRequest()
     setPrograms([])
     setApplications([])
     setStudents([])
-    setSettings(loadSettings())
-    setStorageBytes(0)
+    setSettings(DEFAULT_SETTINGS)
+    setLegacyCount(legacyRecordCount())
   }, [])
 
-  const loadDemoData = useCallback(() => {
-    void import('@/lib/demoData').then(({ applyDemoData }) => {
-      const result = applyDemoData()
-      setPrograms(result.programs)
-      setApplications(result.applications)
-      setStudents(result.students)
-      setSettings(result.settings)
-      refreshStorage()
-    })
-  }, [refreshStorage])
+  const migrateLegacyData = useCallback<StoreContextValue['migrateLegacyData']>(async () => {
+    const { payload, documentCount } = await collectLegacyData()
 
-  const importData = useCallback<StoreContextValue['importData']>(
-    (payload) => {
-      const incomingPrograms = sanitizePrograms(payload.programs)
-      const incomingApplications = sanitizeApplications(payload.applications)
-      const incomingStudents = sanitizeStudents(payload.students)
+    const counts = {
+      programs: payload.programs?.length ?? 0,
+      applications: payload.applications?.length ?? 0,
+      students: payload.students?.length ?? 0,
+    }
 
-      if (
-        incomingPrograms.length === 0 &&
-        incomingApplications.length === 0 &&
-        incomingStudents.length === 0
-      ) {
-        return {
-          ok: false,
-          message: 'No valid records were found in this file.',
-        }
-      }
-
-      // Merge on id so re-importing the same backup does not duplicate rows.
-      setPrograms((prev) => {
-        const map = new Map(prev.map((item) => [item.id, item]))
-        incomingPrograms.forEach((item) => map.set(item.id, item))
-        const next = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-        savePrograms(next)
-        return next
-      })
-
-      setApplications((prev) => {
-        const map = new Map(prev.map((item) => [item.id, item]))
-        incomingApplications.forEach((item) => map.set(item.id, item))
-        const next = [...map.values()]
-        saveApplications(next)
-        return next
-      })
-
-      setStudents((prev) => {
-        const map = new Map(prev.map((item) => [item.id, item]))
-        incomingStudents.forEach((item) => map.set(item.id, item))
-        const next = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-        saveStudents(next)
-        return next
-      })
-
-      // The imported password is never applied, so credentials stay under the
-      // control of whoever is signed in right now.
-      setSettings((prev) => {
-        const next: AppSettings = {
-          college: { ...prev.college, ...(payload.settings?.college ?? {}) },
-          admin: {
-            ...prev.admin,
-            username: payload.settings?.admin?.username ?? prev.admin.username,
-            displayName: payload.settings?.admin?.displayName ?? prev.admin.displayName,
-          },
-        }
-        saveSettings(next)
-        return next
-      })
-
-      refreshStorage()
-
+    if (counts.programs + counts.applications + counts.students === 0) {
+      clearLegacyData()
+      setLegacyCount(0)
       return {
         ok: true,
-        message: 'Backup restored successfully.',
-        counts: {
-          programs: incomingPrograms.length,
-          applications: incomingApplications.length,
-          students: incomingStudents.length,
-        },
+        message: 'There was nothing left in the browser to import.',
+        counts,
       }
-    },
-    [refreshStorage],
-  )
+    }
+
+    const result = await importData(payload)
+
+    if (result.ok) {
+      clearLegacyData()
+      setLegacyCount(legacyRecordCount())
+      return {
+        ok: true,
+        message: documentCount
+          ? `Imported ${counts.applications} applications, including ${documentCount} uploaded document${documentCount === 1 ? '' : 's'}. The browser copy has been cleared.`
+          : 'Imported your browser records and cleared the local copy.',
+        counts,
+      }
+    }
+
+    return result
+  }, [importData])
 
   const value = useMemo<StoreContextValue>(
     () => ({
-      session,
+      status,
+      loadError,
+      me,
+      canEdit,
+      isAdmin,
       signIn,
       signOut,
+      changeOwnPassword,
+      retry,
+
       settings,
-      updateSettings,
-      updateCollege,
+      saveCollege,
+
       programs,
       createProgram,
       updateProgram,
       deleteProgram,
+
       applications,
       createApplication,
       updateApplication,
       setApplicationStatus,
       deleteApplication,
+      uploadDocument,
+
       students,
       createStudent,
       updateStudent,
       deleteStudent,
       promoteToStudent,
+
       programById,
       applicationById,
       studentById,
-      storageBytes,
-      resetAllData,
-      loadDemoData,
+
+      staff,
+      loadStaff,
+      createStaff,
+      updateStaff,
+      deleteStaff,
+
       importData,
+      loadDemoData,
+      resetAllData,
+      legacyCount,
+      migrateLegacyData,
     }),
     [
-      session,
+      status,
+      loadError,
+      me,
+      canEdit,
+      isAdmin,
       signIn,
       signOut,
+      changeOwnPassword,
+      retry,
       settings,
-      updateSettings,
-      updateCollege,
+      saveCollege,
       programs,
       createProgram,
       updateProgram,
@@ -576,6 +550,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       updateApplication,
       setApplicationStatus,
       deleteApplication,
+      uploadDocument,
       students,
       createStudent,
       updateStudent,
@@ -584,10 +559,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       programById,
       applicationById,
       studentById,
-      storageBytes,
-      resetAllData,
-      loadDemoData,
+      staff,
+      loadStaff,
+      createStaff,
+      updateStaff,
+      deleteStaff,
       importData,
+      loadDemoData,
+      resetAllData,
+      legacyCount,
+      migrateLegacyData,
     ],
   )
 

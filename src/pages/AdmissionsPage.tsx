@@ -30,8 +30,16 @@ import { formatDate } from '@/lib/format'
 type StatusFilter = 'all' | ApplicationStatus
 
 export function AdmissionsPage() {
-  const { applications, programs, programById, setApplicationStatus, deleteApplication, students, promoteToStudent } =
-    useStore()
+  const {
+    applications,
+    programs,
+    programById,
+    setApplicationStatus,
+    deleteApplication,
+    students,
+    promoteToStudent,
+    canEdit,
+  } = useStore()
   const toast = useToast()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -47,6 +55,8 @@ export function AdmissionsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Application | null>(null)
   const [rejectTarget, setRejectTarget] = useState<Application | null>(null)
   const [rejectNote, setRejectNote] = useState('')
+  /** Identifies the row being written, so its buttons can show progress. */
+  const [busyId, setBusyId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -82,9 +92,24 @@ export function AdmissionsPage() {
 
   const hasPrograms = programs.length > 0
 
-  const handleApprove = (application: Application) => {
-    setApplicationStatus(application.id, 'approved')
-    toast.success('Application approved', `${application.personal.fullName} has been approved.`)
+  /** Reports a failed write without leaving the dialog open. */
+  const reportFailure = (action: string, error: unknown) => {
+    toast.error(
+      `Could not ${action}`,
+      error instanceof Error ? error.message : 'An unexpected error occurred.',
+    )
+  }
+
+  const handleApprove = async (application: Application) => {
+    setBusyId(application.id)
+    try {
+      await setApplicationStatus(application.id, 'approved')
+      toast.success('Application approved', `${application.personal.fullName} has been approved.`)
+    } catch (error) {
+      reportFailure('approve the application', error)
+    } finally {
+      setBusyId(null)
+    }
   }
 
   const openReject = (application: Application) => {
@@ -92,35 +117,58 @@ export function AdmissionsPage() {
     setRejectNote(application.reviewNote ?? '')
   }
 
-  const confirmReject = () => {
+  const confirmReject = async () => {
     if (!rejectTarget) return
-    setApplicationStatus(rejectTarget.id, 'rejected', rejectNote.trim() || undefined)
-    toast.success('Application rejected', `${rejectTarget.personal.fullName} has been rejected.`)
-    setRejectTarget(null)
-    setRejectNote('')
+    const target = rejectTarget
+    setBusyId(target.id)
+
+    try {
+      await setApplicationStatus(target.id, 'rejected', rejectNote.trim() || undefined)
+      toast.success('Application rejected', `${target.personal.fullName} has been rejected.`)
+      setRejectTarget(null)
+      setRejectNote('')
+    } catch (error) {
+      reportFailure('reject the application', error)
+    } finally {
+      setBusyId(null)
+    }
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return
     const name = deleteTarget.personal.fullName
     const id = deleteTarget.applicationNo
-    deleteApplication(deleteTarget.id)
-    setDeleteTarget(null)
-    if (viewTarget?.id === deleteTarget.id) setViewTarget(null)
-    toast.success('Application deleted', `${id} — ${name} has been removed.`)
+    setBusyId(deleteTarget.id)
+
+    try {
+      await deleteApplication(deleteTarget.id)
+      setDeleteTarget(null)
+      if (viewTarget?.id === deleteTarget.id) setViewTarget(null)
+      toast.success('Application deleted', `${id} — ${name} has been removed.`)
+    } catch (error) {
+      reportFailure('delete the application', error)
+    } finally {
+      setBusyId(null)
+    }
   }
 
-  const handleEnroll = (application: Application) => {
-    const result = promoteToStudent(application.id)
-    if (result.ok && result.student) {
-      toast.success(
-        'Student enrolled',
-        `${result.student.name} has been added as ${result.student.studentNo}.`,
-      )
-    } else if (result.student) {
-      toast.warning('Already enrolled', result.message)
-    } else {
-      toast.error('Could not enrol', result.message)
+  const handleEnroll = async (application: Application) => {
+    setBusyId(application.id)
+    try {
+      const result = await promoteToStudent(application.id)
+
+      if (result.ok && result.student) {
+        toast.success(
+          'Student enrolled',
+          `${result.student.name} has been added as ${result.student.studentNo}.`,
+        )
+      } else if (result.message?.includes('already enrolled')) {
+        toast.warning('Already enrolled', result.message)
+      } else {
+        toast.error('Could not enrol', result.message)
+      }
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -147,12 +195,25 @@ export function AdmissionsPage() {
             >
               Student Register
             </Button>
-            <ButtonLink to="/admissions/new" variant="accent" icon={<Plus size={14} />}>
-              New Application
-            </ButtonLink>
+            {canEdit && (
+              <ButtonLink to="/admissions/new" variant="accent" icon={<Plus size={14} />}>
+                New Application
+              </ButtonLink>
+            )}
           </>
         }
       />
+
+      {!canEdit && (
+        <div className="alert alert--info" style={{ marginBottom: 16 }}>
+          <ScrollText size={16} className="alert__icon" />
+          <div>
+            <strong className="alert__title">Read-only access</strong>
+            You can review every application, but approving, rejecting and enrolling need an account
+            with registrar access.
+          </div>
+        </div>
+      )}
 
       {!hasPrograms && (
         <div className="alert alert--warning" style={{ marginBottom: 16 }}>
@@ -259,6 +320,7 @@ export function AdmissionsPage() {
                   const enrolled = students.some(
                     (student) => student.applicationId === application.id,
                   )
+                  const busy = busyId === application.id
 
                   return (
                     <tr key={application.id}>
@@ -298,52 +360,58 @@ export function AdmissionsPage() {
                             title="View"
                           />
 
-                          <Button
-                            variant="ghost"
-                            icon={<Pencil size={14} />}
-                            onClick={() => navigate(`/admissions/${application.id}/edit`)}
-                            aria-label={`Edit ${application.applicationNo}`}
-                            title="Edit"
-                          />
+                          {canEdit && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                icon={<Pencil size={14} />}
+                                onClick={() => navigate(`/admissions/${application.id}/edit`)}
+                                aria-label={`Edit ${application.applicationNo}`}
+                                title="Edit"
+                              />
 
-                          {application.status !== 'approved' && (
-                            <Button
-                              variant="ghost"
-                              icon={<Check size={14} />}
-                              onClick={() => handleApprove(application)}
-                              aria-label={`Approve ${application.applicationNo}`}
-                              title="Approve"
-                            />
+                              {application.status !== 'approved' && (
+                                <Button
+                                  variant="ghost"
+                                  icon={<Check size={14} />}
+                                  onClick={() => void handleApprove(application)}
+                                  disabled={busy}
+                                  aria-label={`Approve ${application.applicationNo}`}
+                                  title="Approve"
+                                />
+                              )}
+
+                              {application.status !== 'rejected' && (
+                                <Button
+                                  variant="ghost"
+                                  icon={<X size={14} />}
+                                  onClick={() => openReject(application)}
+                                  aria-label={`Reject ${application.applicationNo}`}
+                                  title="Reject"
+                                />
+                              )}
+
+                              {application.status === 'approved' && !enrolled && (
+                                <Button
+                                  variant="ghost"
+                                  icon={<GraduationCap size={14} />}
+                                  onClick={() => void handleEnroll(application)}
+                                  disabled={busy}
+                                  aria-label={`Enrol ${application.personal.fullName}`}
+                                  title="Enrol as student"
+                                />
+                              )}
+
+                              <Button
+                                variant="ghost"
+                                className="btn--danger-ghost"
+                                icon={<Trash2 size={14} />}
+                                onClick={() => setDeleteTarget(application)}
+                                aria-label={`Delete ${application.applicationNo}`}
+                                title="Delete"
+                              />
+                            </>
                           )}
-
-                          {application.status !== 'rejected' && (
-                            <Button
-                              variant="ghost"
-                              icon={<X size={14} />}
-                              onClick={() => openReject(application)}
-                              aria-label={`Reject ${application.applicationNo}`}
-                              title="Reject"
-                            />
-                          )}
-
-                          {application.status === 'approved' && !enrolled && (
-                            <Button
-                              variant="ghost"
-                              icon={<GraduationCap size={14} />}
-                              onClick={() => handleEnroll(application)}
-                              aria-label={`Enrol ${application.personal.fullName}`}
-                              title="Enrol as student"
-                            />
-                          )}
-
-                          <Button
-                            variant="ghost"
-                            className="btn--danger-ghost"
-                            icon={<Trash2 size={14} />}
-                            onClick={() => setDeleteTarget(application)}
-                            aria-label={`Delete ${application.applicationNo}`}
-                            title="Delete"
-                          />
                         </div>
                       </td>
                     </tr>
@@ -403,7 +471,12 @@ export function AdmissionsPage() {
         footer={
           <>
             <Button onClick={() => setRejectTarget(null)}>Cancel</Button>
-            <Button variant="danger" icon={<X size={14} />} onClick={confirmReject}>
+            <Button
+              variant="danger"
+              icon={<X size={14} />}
+              disabled={rejectTarget ? busyId === rejectTarget.id : false}
+              onClick={() => void confirmReject()}
+            >
               Reject application
             </Button>
           </>
@@ -442,7 +515,7 @@ export function AdmissionsPage() {
             documents. This cannot be undone.
           </>
         }
-        onConfirm={confirmDelete}
+        onConfirm={() => void confirmDelete()}
         onCancel={() => setDeleteTarget(null)}
       />
     </>

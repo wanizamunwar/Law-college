@@ -56,13 +56,14 @@ async function fileToScaledDataUrl(file: File, maxSize = 256): Promise<string> {
 }
 
 export function CollegeInformationPage() {
-  const { settings, updateSettings } = useStore()
+  const { settings, saveCollege, canEdit } = useStore()
   const toast = useToast()
 
   const [form, setForm] = useState<CollegeProfile>(settings.college)
   const [errors, setErrors] = useState<Errors>({})
   const [logoError, setLogoError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   const logoInputRef = useRef<HTMLInputElement>(null)
   // Lets us detect edits made on the Location page.
@@ -155,16 +156,16 @@ export function CollegeInformationPage() {
     return Object.keys(next).length === 0
   }
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!validate()) {
       toast.error('Check the form', 'Some fields need attention before saving.')
       return
     }
 
-    updateSettings({
-      ...settings,
-      college: {
+    setSaving(true)
+    try {
+      await saveCollege({
         ...form,
         name: form.name.trim(),
         shortName: form.shortName.trim(),
@@ -174,12 +175,18 @@ export function CollegeInformationPage() {
         website: form.website.trim(),
         about: form.about.trim(),
         city: form.city.trim(),
-      },
-    })
+      })
 
-    previousProfile.current = settings.college
-    setDirty(false)
-    toast.success('College information saved', 'Your changes are now reflected across the system.')
+      setDirty(false)
+      toast.success('College information saved', 'Your changes are now reflected across the system.')
+    } catch (error) {
+      toast.error(
+        'Could not save the profile',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleReset = () => {
@@ -208,9 +215,9 @@ export function CollegeInformationPage() {
               onClick={handleSubmit}
               type="submit"
               form="college-form"
-              disabled={!dirty}
+              disabled={!dirty || saving || !canEdit}
             >
-              Save changes
+              {saving ? 'Saving…' : 'Save changes'}
             </Button>
           </>
         }
@@ -468,7 +475,11 @@ export function CollegeInformationPage() {
             <div className="form-actions" style={{ borderRadius: 'var(--radius-lg)' }}>
               <span className="form-actions__note">
                 <ImageIcon size={13} />
-                {dirty ? 'You have unsaved changes' : 'All changes saved'}
+                {!canEdit
+                  ? 'Your account has read-only access'
+                  : dirty
+                    ? 'You have unsaved changes'
+                    : 'All changes saved'}
               </span>
               <Button variant="secondary" onClick={handleReset} disabled={!dirty}>
                 Discard
@@ -477,9 +488,9 @@ export function CollegeInformationPage() {
                 type="submit"
                 variant="accent"
                 icon={<Save size={14} />}
-                disabled={!dirty}
+                disabled={!dirty || saving || !canEdit}
               >
-                Save changes
+                {saving ? 'Saving…' : 'Save changes'}
               </Button>
             </div>
           </div>

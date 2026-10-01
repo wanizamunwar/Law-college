@@ -1,12 +1,7 @@
-import type { AppSettings, CollegeProfile, OfficeHours } from '@/types'
+import type { CollegeProfile, OfficeHours } from '@/types'
 
-export const STORAGE_KEYS = {
-  settings: 'settings',
-  programs: 'programs',
-  applications: 'applications',
-  students: 'students',
-  session: 'session',
-} as const
+/** Keys the pre-database version wrote to `localStorage`. */
+export const LEGACY_STORAGE_PREFIX = 'lcm:'
 
 export const EMPTY_OFFICE_HOURS: OfficeHours = {
   monday: '08:30 – 16:00',
@@ -34,15 +29,6 @@ export const DEFAULT_COLLEGE: CollegeProfile = {
   province: '',
   latitude: '',
   longitude: '',
-}
-
-export const DEFAULT_SETTINGS: AppSettings = {
-  college: DEFAULT_COLLEGE,
-  admin: {
-    username: 'admin',
-    displayName: 'Registrar',
-    password: 'admin123',
-  },
 }
 
 /** Province options — Pakistan (the CNIC field implies this context). */

@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { useStore } from '@/store/StoreContext'
+import type { StaffUser } from '@/types'
 import { initials } from '@/lib/format'
 
 interface NavItem {
@@ -26,8 +27,15 @@ interface NavItem {
   end?: boolean
 }
 
+/** How the account's access level reads in the top bar. */
+function roleLabel(role: StaffUser['role'] | undefined): string {
+  if (role === 'admin') return 'Administrator'
+  if (role === 'registrar') return 'Registrar'
+  return 'Read-only'
+}
+
 export function AppLayout() {
-  const { session, signOut, applications, programs, students, settings } = useStore()
+  const { me, signOut, applications, programs, students, settings, canEdit } = useStore()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -186,7 +194,9 @@ export function AppLayout() {
         </nav>
 
         <div className="sidebar__footer">
-          <p className="sidebar__version">Version 1.0 · Local workspace</p>
+          <p className="sidebar__version">
+            {canEdit ? 'Registrar access' : 'Read-only access'} · PostgreSQL
+          </p>
         </div>
       </aside>
 
@@ -210,14 +220,16 @@ export function AppLayout() {
           </div>
 
           <div className="topbar__actions">
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm desktop-only"
-              onClick={() => navigate('/admissions/new')}
-            >
-              <FileText size={14} />
-              New Application
-            </button>
+            {canEdit && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm desktop-only"
+                onClick={() => navigate('/admissions/new')}
+              >
+                <FileText size={14} />
+                New Application
+              </button>
+            )}
 
             <span className="topbar__divider desktop-only" aria-hidden="true" />
 
@@ -229,19 +241,19 @@ export function AppLayout() {
                 aria-expanded={userMenuOpen}
                 aria-haspopup="menu"
               >
-                <span className="avatar">{initials(session?.displayName || 'Admin')}</span>
+                <span className="avatar">{initials(me?.displayName || 'Admin')}</span>
                 <span className="desktop-only">
-                  <span className="user-menu__name">{session?.displayName}</span>
+                  <span className="user-menu__name">{me?.displayName}</span>
                   <br />
-                  <span className="user-menu__role">Administrator</span>
+                  <span className="user-menu__role">{roleLabel(me?.role)}</span>
                 </span>
               </button>
 
               {userMenuOpen && (
                 <div className="user-menu__panel" role="menu">
                   <div className="user-menu__header">
-                    <p className="user-menu__name">{session?.displayName}</p>
-                    <p className="user-menu__role">Signed in as {session?.username}</p>
+                    <p className="user-menu__name">{me?.displayName}</p>
+                    <p className="user-menu__role">Signed in as {me?.username}</p>
                   </div>
                   <button
                     type="button"
@@ -261,15 +273,17 @@ export function AppLayout() {
                     <SettingsIcon size={14} />
                     Settings
                   </button>
-                  <button
-                    type="button"
-                    className="user-menu__item"
-                    onClick={() => navigate('/admissions/new')}
-                    role="menuitem"
-                  >
-                    <ClipboardList size={14} />
-                    New application
-                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="user-menu__item"
+                      onClick={() => navigate('/admissions/new')}
+                      role="menuitem"
+                    >
+                      <ClipboardList size={14} />
+                      New application
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="user-menu__item user-menu__item--danger"

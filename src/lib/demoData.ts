@@ -2,14 +2,14 @@
  * Demonstration dataset.
  *
  * Nothing here is required by the application — it exists so the dashboard,
- * tables and filters can be reviewed with realistic content. Programs are
- * created through the same shape the Programs page writes, and the admin can
- * wipe everything from Settings.
+ * tables and filters can be reviewed with realistic content. The records are
+ * pushed through the same import endpoint a backup uses, so the database is the
+ * only place they ever live, and the admin can wipe everything from Settings.
  */
 
-import type { Application, Program, Student } from '@/types'
+import type { AppSettings, Application, Program, Student } from '@/types'
 import { currentSessionYear } from './id'
-import { saveApplications, savePrograms, saveSettings, saveStudents, loadSettings } from './repository'
+import { DEFAULT_COLLEGE } from './defaults'
 
 const iso = (daysAgo: number, hour = 10): string => {
   const date = new Date()
@@ -329,40 +329,36 @@ export interface DemoDataResult {
   programs: Program[]
   applications: Application[]
   students: Student[]
-  settings: ReturnType<typeof loadSettings>
+  settings: AppSettings
 }
 
 export function buildDemoData(): DemoDataResult {
   const programs = buildPrograms()
   const applications = buildApplications(programs)
   const students = buildStudents(applications, programs)
-  const settings = loadSettings()
-  settings.college = {
-    ...settings.college,
-    name: 'Siraj-ud-Daulah Law College',
-    shortName: 'SDL Law College',
-    address: 'University Road, Shahrah-e-Faisal',
-    city: 'Lahore',
-    province: 'Punjab',
-    phone: '+92 42 3577 1200',
-    email: 'registrar@sirajuddulah.edu.pk',
-    website: 'https://www.sirajuddulah.edu.pk',
-    establishmentYear: '1974',
-    registrarName: 'Prof. Nusrat Hussain, Ph.D.',
-    latitude: '31.4686',
-    longitude: '74.3842',
-    about:
-      'Siraj-ud-Daulah Law College was established in 1974 with the founding aim of producing graduates grounded in jurisprudence, statutory law and public service. The college offers a five-year integrated LL.B., a three-year LL.B. and a Master of Laws, alongside a moot court programme that places every student before a bench of practising judges and advocates each year.',
+
+  return {
+    programs,
+    applications,
+    students,
+    settings: {
+      college: {
+        ...DEFAULT_COLLEGE,
+        name: 'Siraj-ud-Daulah Law College',
+        shortName: 'SDL Law College',
+        address: 'University Road, Shahrah-e-Faisal',
+        city: 'Lahore',
+        province: 'Punjab',
+        phone: '+92 42 3577 1200',
+        email: 'registrar@sirajuddulah.edu.pk',
+        website: 'https://www.sirajuddulah.edu.pk',
+        establishmentYear: '1974',
+        registrarName: 'Prof. Nusrat Hussain, Ph.D.',
+        latitude: '31.4686',
+        longitude: '74.3842',
+        about:
+          'Siraj-ud-Daulah Law College was established in 1974 with the founding aim of producing graduates grounded in jurisprudence, statutory law and public service. The college offers a five-year integrated LL.B., a three-year LL.B. and a Master of Laws, alongside a moot court programme that places every student before a bench of practising judges and advocates each year.',
+      },
+    },
   }
-
-  return { programs, applications, students, settings }
-}
-
-export function applyDemoData(): DemoDataResult {
-  const result = buildDemoData()
-  savePrograms(result.programs)
-  saveApplications(result.applications)
-  saveStudents(result.students)
-  saveSettings(result.settings)
-  return result
 }

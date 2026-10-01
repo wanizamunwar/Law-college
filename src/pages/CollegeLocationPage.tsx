@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Building2,
   Compass,
@@ -20,7 +20,7 @@ import { LATITUDE_MESSAGE, LATITUDE_PATTERN, LONGITUDE_MESSAGE, LONGITUDE_PATTER
 type Errors = Partial<{ latitude: string; longitude: string; address: string; city: string }>
 
 export function CollegeLocationPage() {
-  const { updateCollege, settings } = useStore()
+  const { saveCollege, settings, canEdit } = useStore()
   const toast = useToast()
 
   const college = settings.college
@@ -31,6 +31,17 @@ export function CollegeLocationPage() {
   const [latitude, setLatitude] = useState(college.latitude)
   const [longitude, setLongitude] = useState(college.longitude)
   const [errors, setErrors] = useState<Errors>({})
+  const [saving, setSaving] = useState(false)
+
+  // Picks up edits made on the College Information page.
+  useEffect(() => {
+    setAddress(college.address)
+    setCity(college.city)
+    setProvince(college.province)
+    setLatitude(college.latitude)
+    setLongitude(college.longitude)
+    // Only the identity of the profile object matters here.
+  }, [college])
 
   const lat = Number(latitude)
   const lng = Number(longitude)
@@ -83,7 +94,7 @@ export function CollegeLocationPage() {
     return null
   }, [hasCoordinates, lat, lng, fullAddress])
 
-  const handleSave = (event: React.FormEvent) => {
+  const handleSave = async (event: React.FormEvent) => {
     event.preventDefault()
 
     const next: Errors = {}
@@ -112,15 +123,26 @@ export function CollegeLocationPage() {
       return
     }
 
-    updateCollege({
-      address: address.trim(),
-      city: city.trim(),
-      province,
-      latitude: latitude.trim(),
-      longitude: longitude.trim(),
-    })
+    setSaving(true)
+    try {
+      await saveCollege({
+        ...college,
+        address: address.trim(),
+        city: city.trim(),
+        province,
+        latitude: latitude.trim(),
+        longitude: longitude.trim(),
+      })
 
-    toast.success('Location saved', 'The map and directions link now use these coordinates.')
+      toast.success('Location saved', 'The map and directions link now use these coordinates.')
+    } catch (error) {
+      toast.error(
+        'Could not save the location',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
   const useCurrentLocation = () => {
@@ -163,8 +185,14 @@ export function CollegeLocationPage() {
         title="College Location"
         description="The registered address and geographic coordinates of the campus, used for directions and the embedded map."
         actions={
-          <Button variant="accent" icon={<Save size={14} />} type="submit" form="location-form">
-            Save location
+          <Button
+            variant="accent"
+            icon={<Save size={14} />}
+            type="submit"
+            form="location-form"
+            disabled={saving || !canEdit}
+          >
+            {saving ? 'Saving…' : 'Save location'}
           </Button>
         }
       />
@@ -370,8 +398,13 @@ export function CollegeLocationPage() {
             <ButtonLink to="/college" variant="secondary">
               Edit full profile
             </ButtonLink>
-            <Button type="submit" variant="accent" icon={<Save size={14} />}>
-              Save location
+            <Button
+              type="submit"
+              variant="accent"
+              icon={<Save size={14} />}
+              disabled={saving || !canEdit}
+            >
+              {saving ? 'Saving…' : 'Save location'}
             </Button>
           </div>
         </div>

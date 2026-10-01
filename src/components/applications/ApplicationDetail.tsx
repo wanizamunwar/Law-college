@@ -11,7 +11,7 @@ import type { Application } from '@/types'
 import { ApplicationStatusBadge } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatBytes, formatDate, formatDateTime, titleCase } from '@/lib/format'
-import { documentObjectUrl } from '@/lib/documentStore'
+import { documentObjectUrl } from '@/lib/api'
 
 interface ApplicationDetailProps {
   application: Application
@@ -210,8 +210,8 @@ function DocumentItem({ entry }: { entry: DocumentEntry }) {
     let url: string | null = null
     let cancelled = false
 
-    documentObjectUrl(doc.id)
-      .then((result) => {
+    documentObjectUrl(doc.id, doc.mimeType)
+      .then((result: string | null) => {
         if (cancelled) {
           if (result) URL.revokeObjectURL(result)
           return
@@ -242,7 +242,7 @@ function DocumentItem({ entry }: { entry: DocumentEntry }) {
   }
 
   const openDocument = async () => {
-    const url = await documentObjectUrl(doc.id)
+    const url = await documentObjectUrl(doc.id, doc.mimeType).catch(() => null)
     if (!url) {
       setFailed(true)
       return

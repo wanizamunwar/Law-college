@@ -51,7 +51,7 @@ const STATUS_OPTIONS: Array<{ value: StudentStatus; label: string }> = [
 type StatusFilter = 'all' | StudentStatus
 
 export function StudentsPage() {
-  const { students, programs, programById, createStudent, updateStudent, deleteStudent } =
+  const { students, programs, programById, createStudent, updateStudent, deleteStudent, canEdit } =
     useStore()
   const toast = useToast()
 
@@ -66,6 +66,8 @@ export function StudentsPage() {
 
   const [viewTarget, setViewTarget] = useState<Student | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Student | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -125,7 +127,7 @@ export function StudentsPage() {
     setErrors({})
   }
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
 
     const next: Partial<Record<keyof StudentFormState, string>> = {}
@@ -148,24 +150,43 @@ export function StudentsPage() {
       status: form.status,
     }
 
-    if (editing) {
-      updateStudent(editing.id, payload)
-      toast.success('Student updated', `${payload.name}'s record was saved.`)
-    } else {
-      createStudent({ ...payload, applicationId: null })
-      toast.success('Student added', `${payload.name} has been added to the register.`)
+    setSaving(true)
+    try {
+      if (editing) {
+        await updateStudent(editing.id, payload)
+        toast.success('Student updated', `${payload.name}'s record was saved.`)
+      } else {
+        await createStudent({ ...payload, applicationId: null })
+        toast.success('Student added', `${payload.name} has been added to the register.`)
+      }
+      closeForm()
+    } catch (error) {
+      toast.error(
+        'Could not save the student',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setSaving(false)
     }
-
-    closeForm()
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return
-    const { name, studentNo } = deleteTarget
-    deleteStudent(deleteTarget.id)
-    setDeleteTarget(null)
-    if (viewTarget?.id === deleteTarget.id) setViewTarget(null)
-    toast.success('Student deleted', `${studentNo} — ${name} has been removed.`)
+    const { name, studentNo, id } = deleteTarget
+    setDeleting(true)
+    try {
+      await deleteStudent(id)
+      setDeleteTarget(null)
+      if (viewTarget?.id === id) setViewTarget(null)
+      toast.success('Student deleted', `${studentNo} — ${name} has been removed.`)
+    } catch (error) {
+      toast.error(
+        'Could not delete the student',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const resetFilters = () => {
@@ -185,14 +206,16 @@ export function StudentsPage() {
         title="Students"
         description="The official student register. Students are enrolled from approved applications or added directly."
         actions={
-          <Button
-            variant="accent"
-            icon={<Plus size={14} />}
-            onClick={openCreate}
-            disabled={programs.length === 0}
-          >
-            Add Student
-          </Button>
+          canEdit ? (
+            <Button
+              variant="accent"
+              icon={<Plus size={14} />}
+              onClick={openCreate}
+              disabled={programs.length === 0}
+            >
+              Add Student
+            </Button>
+          ) : undefined
         }
       />
 
@@ -271,14 +294,16 @@ export function StudentsPage() {
             }
             action={
               students.length === 0 ? (
-                <Button
-                  variant="accent"
-                  icon={<Plus size={14} />}
-                  onClick={openCreate}
-                  disabled={programs.length === 0}
-                >
-                  Add the first student
-                </Button>
+                canEdit ? (
+                  <Button
+                    variant="accent"
+                    icon={<Plus size={14} />}
+                    onClick={openCreate}
+                    disabled={programs.length === 0}
+                  >
+                    Add the first student
+                  </Button>
+                ) : undefined
               ) : (
                 <Button onClick={resetFilters}>Clear filters</Button>
               )
@@ -339,21 +364,25 @@ export function StudentsPage() {
                             aria-label={`View ${student.studentNo}`}
                             title="View"
                           />
-                          <Button
-                            variant="ghost"
-                            icon={<Pencil size={14} />}
-                            onClick={() => openEdit(student)}
-                            aria-label={`Edit ${student.studentNo}`}
-                            title="Edit"
-                          />
-                          <Button
-                            variant="ghost"
-                            className="btn--danger-ghost"
-                            icon={<Trash2 size={14} />}
-                            onClick={() => setDeleteTarget(student)}
-                            aria-label={`Delete ${student.studentNo}`}
-                            title="Delete"
-                          />
+                          {canEdit && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                icon={<Pencil size={14} />}
+                                onClick={() => openEdit(student)}
+                                aria-label={`Edit ${student.studentNo}`}
+                                title="Edit"
+                              />
+                              <Button
+                                variant="ghost"
+                                className="btn--danger-ghost"
+                                icon={<Trash2 size={14} />}
+                                onClick={() => setDeleteTarget(student)}
+                                aria-label={`Delete ${student.studentNo}`}
+                                title="Delete"
+                              />
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -378,8 +407,8 @@ export function StudentsPage() {
         footer={
           <>
             <Button onClick={closeForm}>Cancel</Button>
-            <Button variant="primary" type="submit" form="student-form">
-              {editing ? 'Save changes' : 'Add student'}
+            <Button variant="primary" type="submit" form="student-form" disabled={saving}>
+              {saving ? 'Saving…' : editing ? 'Save changes' : 'Add student'}
             </Button>
           </>
         }
@@ -546,7 +575,7 @@ export function StudentsPage() {
         open={deleteTarget !== null}
         title="Delete student record"
         destructive
-        confirmLabel="Delete student"
+        confirmLabel={deleting ? 'Deleting…' : 'Delete student'}
         message={
           <>
             <strong>{deleteTarget?.studentNo}</strong> — {deleteTarget?.name} will be permanently

@@ -1,143 +1,252 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Database,
   Download,
+  HardDriveDownload,
   KeyRound,
+  Plus,
   Save,
   ShieldCheck,
   Trash2,
   TriangleAlert,
   Upload,
   User,
+  Users,
 } from 'lucide-react'
 import { useStore } from '@/store/StoreContext'
-import { Alert, Card, PageHeader } from '@/components/ui/Card'
+import type { ImportPayload } from '@/store/StoreContext'
+import { Alert, Badge, Card, PageHeader } from '@/components/ui/Card'
 import { Button, ButtonLink } from '@/components/ui/Button'
-import { Input, PasswordInput } from '@/components/ui/Form'
+import { Input, PasswordInput, Select } from '@/components/ui/Form'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
-import { DEFAULT_SETTINGS } from '@/lib/defaults'
-import { formatBytes } from '@/lib/format'
-import type { ImportPayload } from '@/store/StoreContext'
+import type { Role, StaffUser } from '@/types'
+import { formatDate } from '@/lib/format'
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-type Section = 'profile' | 'security' | 'data'
+function describeError(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
+const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
+  { value: 'admin', label: 'Administrator' },
+  { value: 'registrar', label: 'Registrar' },
+  { value: 'viewer', label: 'Read-only' },
+]
+
+const ROLE_SUMMARY: Record<Role, string> = {
+  admin: 'Full access, including staff accounts and clearing the database.',
+  registrar: 'Can create, edit and delete every academic record.',
+  viewer: 'Can read the system but cannot change anything.',
+}
+
+type Section = 'account' | 'staff' | 'data'
 
 export function SettingsPage() {
   const {
-    settings,
-    updateSettings,
+    me,
+    isAdmin,
+    canEdit,
     signOut,
+    changeOwnPassword,
+    settings,
     applications,
     programs,
     students,
-    storageBytes,
+    staff,
+    loadStaff,
+    createStaff,
+    updateStaff,
+    deleteStaff,
     resetAllData,
     loadDemoData,
     importData,
+    legacyCount,
+    migrateLegacyData,
   } = useStore()
 
   const toast = useToast()
   const navigate = useNavigate()
 
-  const [section, setSection] = useState<Section>('profile')
+  const [section, setSection] = useState<Section>('account')
 
-  /* --------------------------- Profile --------------------------- */
-  const [displayName, setDisplayName] = useState(settings.admin.displayName)
-  const [username, setUsername] = useState(settings.admin.username)
-  const [profileErrors, setProfileErrors] = useState<{
-    displayName?: string
-    username?: string
-  }>({})
-
-  /* --------------------------- Security -------------------------- */
+  /* ----------------------------- Password ---------------------------- */
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [securityErrors, setSecurityErrors] = useState<{
+  const [passwordErrors, setPasswordErrors] = useState<{
     currentPassword?: string
     newPassword?: string
     confirmPassword?: string
   }>({})
-  const [securityOpen, setSecurityOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
   const passwordFormRef = useRef<HTMLFormElement>(null)
 
-  /* ----------------------------- Data ---------------------------- */
+  /* ------------------------------ Staff ------------------------------ */
+  const [staffLoading, setStaffLoading] = useState(false)
+  const [staffErrors, setStaffErrors] = useState<{
+    username?: string
+    displayName?: string
+    password?: string
+  }>({})
+  const [newUsername, setNewUsername] = useState('')
+  const [newDisplayName, setNewDisplayName] = useState('')
+  const [newPassword2, setNewPassword2] = useState('')
+  const [newRole, setNewRole] = useState<Role>('registrar')
+  const [creatingStaff, setCreatingStaff] = useState(false)
+  const [busyStaffId, setBusyStaffId] = useState<string | null>(null)
+  const [removeTarget, setRemoveTarget] = useState<StaffUser | null>(null)
+
+  /* ------------------------------ Data ------------------------------- */
   const [resetOpen, setResetOpen] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
+  const [importPending, setImportPending] = useState(false)
+  const [migrating, setMigrating] = useState(false)
+  const [busyData, setBusyData] = useState(false)
   const importInputRef = useRef<HTMLInputElement>(null)
 
-  const profileDirty =
-    displayName !== settings.admin.displayName || username !== settings.admin.username
+  useEffect(() => {
+    if (section === 'staff' && isAdmin) void loadStaff()
+  }, [section, isAdmin, loadStaff])
 
-  const handleSaveProfile = (event: React.FormEvent) => {
-    event.preventDefault()
+  /* --------------------------- Password flow -------------------------- */
 
-    const next: typeof profileErrors = {}
-    if (!displayName.trim()) next.displayName = 'Display name is required.'
-    if (!username.trim()) next.username = 'Username is required.'
-    else if (!/^[a-zA-Z0-9._-]{3,24}$/.test(username.trim())) {
-      next.username = 'Use 3–24 letters, numbers, dots, dashes or underscores.'
-    }
-
-    setProfileErrors(next)
-    if (Object.keys(next).length > 0) return
-
-    updateSettings({
-      ...settings,
-      admin: {
-        ...settings.admin,
-        displayName: displayName.trim(),
-        username: username.trim(),
-      },
-    })
-
-    toast.success('Profile updated', 'Your administrator details have been saved.')
-  }
-
-  const openSecurity = () => {
+  const openPassword = () => {
     setCurrentPassword('')
     setNewPassword('')
     setConfirmPassword('')
-    setSecurityErrors({})
-    setSecurityOpen(true)
+    setPasswordErrors({})
+    setPasswordOpen(true)
   }
 
-  const handleChangePassword = (event: React.FormEvent) => {
+  const handleChangePassword = async (event: React.FormEvent) => {
     event.preventDefault()
-
-    // The form lives inside the dialog; a native submit keeps validation and
-    // Enter-to-submit working instead of dispatching a synthetic event.
     if (!passwordFormRef.current?.reportValidity()) return
 
-    const next: typeof securityErrors = {}
-    if (currentPassword !== settings.admin.password) {
-      next.currentPassword = 'The current password is incorrect.'
-    }
-    if (newPassword.length < 6) {
-      next.newPassword = 'The new password must be at least 6 characters.'
+    const next: typeof passwordErrors = {}
+    if (newPassword.length < 8) {
+      next.newPassword = 'The new password must be at least 8 characters.'
     }
     if (newPassword !== confirmPassword) {
       next.confirmPassword = 'The two passwords do not match.'
     }
 
-    setSecurityErrors(next)
+    setPasswordErrors(next)
     if (Object.keys(next).length > 0) return
 
-    updateSettings({
-      ...settings,
-      admin: { ...settings.admin, password: newPassword },
-    })
-
-    setSecurityOpen(false)
-    toast.success('Password changed', 'Use the new password the next time you sign in.')
+    setChangingPassword(true)
+    try {
+      await changeOwnPassword(currentPassword, newPassword)
+      setPasswordOpen(false)
+      toast.success('Password changed', 'Use the new password the next time you sign in.')
+    } catch (error) {
+      setPasswordErrors({
+        currentPassword: describeError(error, 'The password could not be changed.'),
+      })
+    } finally {
+      setChangingPassword(false)
+    }
   }
 
-  /* ---------------------------- Export ---------------------------- */
+  /* ---------------------------- Staff flow --------------------------- */
+
+  const refreshStaff = async () => {
+    setStaffLoading(true)
+    try {
+      await loadStaff()
+    } catch (error) {
+      toast.error('Could not load accounts', describeError(error, 'Please try again.'))
+    } finally {
+      setStaffLoading(false)
+    }
+  }
+
+  const handleCreateStaff = async (event: React.FormEvent) => {
+    event.preventDefault()
+
+    const next: typeof staffErrors = {}
+    if (!newDisplayName.trim()) next.displayName = 'Display name is required.'
+    if (!/^[a-zA-Z0-9._-]{3,24}$/.test(newUsername.trim())) {
+      next.username = 'Use 3–24 letters, numbers, dots, dashes or underscores.'
+    }
+    if (newPassword2.length < 8) next.password = 'The password must be at least 8 characters.'
+
+    setStaffErrors(next)
+    if (Object.keys(next).length > 0) return
+
+    setCreatingStaff(true)
+    try {
+      await createStaff({
+        username: newUsername.trim(),
+        displayName: newDisplayName.trim(),
+        password: newPassword2,
+        role: newRole,
+      })
+      setNewUsername('')
+      setNewDisplayName('')
+      setNewPassword2('')
+      setNewRole('registrar')
+      setStaffErrors({})
+      toast.success('Account created', `${newDisplayName.trim()} can now sign in.`)
+    } catch (error) {
+      setStaffErrors({ username: describeError(error, 'The account could not be created.') })
+    } finally {
+      setCreatingStaff(false)
+    }
+  }
+
+  const patchStaff = async (user: StaffUser, patch: Parameters<typeof updateStaff>[1]) => {
+    setBusyStaffId(user.id)
+    try {
+      await updateStaff(user.id, patch)
+      toast.success('Account updated', `${user.displayName}'s access has changed.`)
+    } catch (error) {
+      toast.error('Could not update account', describeError(error, 'Please try again.'))
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  const handleRemoveStaff = async () => {
+    if (!removeTarget) return
+
+    const target = removeTarget
+    setRemoveTarget(null)
+    setBusyStaffId(target.id)
+    try {
+      await deleteStaff(target.id)
+      toast.success('Account removed', `${target.displayName} can no longer sign in.`)
+    } catch (error) {
+      toast.error('Could not remove account', describeError(error, 'Please try again.'))
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  const resetStaffPassword = async (user: StaffUser) => {
+    // A generated password beats a shared one: it is handed over out of band.
+    const suggestion = `${user.username}-${Math.random().toString(36).slice(2, 8)}`
+    setBusyStaffId(user.id)
+    try {
+      await updateStaff(user.id, { password: suggestion })
+      toast.success('Password reset', `Give ${user.displayName} this password: ${suggestion}`)
+    } catch (error) {
+      toast.error('Could not reset password', describeError(error, 'Please try again.'))
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  /* ---------------------------- Export ------------------------------- */
 
   const handleExport = () => {
     const payload = {
@@ -146,10 +255,7 @@ export function SettingsPage() {
       programs,
       applications,
       students,
-      settings: {
-        college: settings.college,
-        admin: { username: settings.admin.username, displayName: settings.admin.displayName },
-      },
+      settings: { college: settings.college },
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -162,78 +268,104 @@ export function SettingsPage() {
     document.body.removeChild(link)
     setTimeout(() => URL.revokeObjectURL(url), 1000)
 
-    toast.success('Backup downloaded', 'Your records have been exported as a JSON file.')
-  }
-
-  const [importPending, setImportPending] = useState(false)
-
-  const handleImport = (file: File) => {
-    const reader = new FileReader()
-
-    reader.onload = () => {
-      setImportPending(false)
-      try {
-        const parsed = JSON.parse(String(reader.result)) as ImportPayload
-
-        if (!isRecord(parsed)) {
-          toast.error('Invalid file', 'This file is not a Law College backup.')
-          return
-        }
-
-        const result = importData(parsed)
-
-        if (!result.ok) {
-          toast.error('Nothing imported', result.message)
-          return
-        }
-
-        const counts = result.counts
-        toast.success(
-          'Backup restored',
-          `Imported ${counts?.programs ?? 0} programs, ${counts?.applications ?? 0} applications and ${counts?.students ?? 0} students. Existing records with the same ID were updated.`,
-        )
-      } catch {
-        toast.error('Invalid file', 'The selected file is not valid JSON.')
-      }
-    }
-
-    reader.onerror = () => {
-      setImportPending(false)
-      toast.error('Read failed', 'The file could not be read.')
-    }
-
-    setImportPending(true)
-    reader.readAsText(file)
-  }
-
-  const handleReset = () => {
-    resetAllData()
-    setResetOpen(false)
-    toast.success('All data cleared', 'Programs, applications and students have been removed.')
-  }
-
-  const handleLoadDemo = () => {
-    loadDemoData()
-    setDemoOpen(false)
     toast.success(
-      'Sample data loaded',
-      'Four programs, eight applications and enrolled students are now available.',
+      'Backup downloaded',
+      'Uploaded document files are not included — they live in the database.',
     )
   }
 
-  const usagePercent = Math.min(100, Math.round((storageBytes / (5 * 1024 * 1024)) * 100))
+  const handleImport = async (file: File) => {
+    setImportPending(true)
+    try {
+      const text = await file.text()
+      const parsed: unknown = JSON.parse(text)
+
+      if (!isRecord(parsed)) {
+        toast.error('Invalid file', 'This file is not a Law College backup.')
+        return
+      }
+
+      const result = await importData(parsed as ImportPayload)
+
+      if (!result.ok) {
+        toast.error('Nothing imported', result.message ?? 'The backup could not be read.')
+        return
+      }
+
+      const counts = result.counts
+      toast.success(
+        'Backup restored',
+        `Imported ${counts?.programs ?? 0} programs, ${counts?.applications ?? 0} applications and ${counts?.students ?? 0} students. Records with the same ID were updated.`,
+      )
+    } catch {
+      toast.error('Invalid file', 'The selected file is not valid JSON.')
+    } finally {
+      setImportPending(false)
+    }
+  }
+
+  const handleReset = async () => {
+    setBusyData(true)
+    try {
+      await resetAllData()
+      setResetOpen(false)
+      toast.success(
+        'All data cleared',
+        'Programs, applications, students and documents have been removed from the database.',
+      )
+    } catch (error) {
+      toast.error('Could not clear data', describeError(error, 'Please try again.'))
+    } finally {
+      setBusyData(false)
+    }
+  }
+
+  const handleLoadDemo = async () => {
+    setBusyData(true)
+    try {
+      const result = await loadDemoData()
+      if (!result.ok) {
+        toast.error('Sample data not loaded', result.message)
+        return
+      }
+      setDemoOpen(false)
+      toast.success(
+        'Sample data loaded',
+        'Sample programmes, applications and enrolled students are now available.',
+      )
+    } catch (error) {
+      toast.error('Sample data not loaded', describeError(error, 'Please try again.'))
+    } finally {
+      setBusyData(false)
+    }
+  }
+
+  const handleMigrate = async () => {
+    setMigrating(true)
+    try {
+      const result = await migrateLegacyData()
+      if (result.ok) toast.success('Browser data imported', result.message)
+      else toast.error('Nothing imported', result.message)
+    } catch (error) {
+      toast.error('Import failed', describeError(error, 'The browser data could not be read.'))
+    } finally {
+      setMigrating(false)
+    }
+  }
+
+  const recordTotal = programs.length + applications.length + students.length
 
   const sections: Array<{ key: Section; label: string; icon: React.ReactNode }> = [
-    { key: 'profile', label: 'Administrator', icon: <User size={15} /> },
-    { key: 'security', label: 'Security', icon: <ShieldCheck size={15} /> },
-    { key: 'data', label: 'Data & Storage', icon: <Database size={15} /> },
+    { key: 'account', label: 'My Account', icon: <User size={15} /> },
+    ...(isAdmin ? [{ key: 'staff' as Section, label: 'Staff', icon: <Users size={15} /> }] : []),
+    { key: 'data', label: 'Data', icon: <Database size={15} /> },
   ]
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Administrator account, password and local data management."
+        description="Your account, staff access and the records held in the college database."
       />
 
       <div className="settings-layout">
@@ -258,79 +390,35 @@ export function SettingsPage() {
         </nav>
 
         <div>
-          {/* -------------------------- Profile -------------------------- */}
-          {section === 'profile' && (
-            <Card title="Administrator Profile" subtitle="Details shown in the top bar">
-              <form onSubmit={handleSaveProfile} noValidate>
-                <div className="form-grid form-grid--2">
-                  <Input
-                    label="Display Name"
-                    value={displayName}
-                    onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="e.g. Registrar"
-                    error={profileErrors.displayName}
-                    required
-                  />
-                  <Input
-                    label="Username"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    autoComplete="username"
-                    error={profileErrors.username}
-                    hint="Used to sign in. Letters, numbers, dots, dashes and underscores."
-                    required
-                  />
-                </div>
-
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    gap: 8,
-                    marginTop: 18,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <Button
-                    onClick={() => {
-                      setDisplayName(settings.admin.displayName)
-                      setUsername(settings.admin.username)
-                      setProfileErrors({})
-                    }}
-                    disabled={!profileDirty}
-                  >
-                    Discard
-                  </Button>
-                  <Button
-                    type="submit"
-                    variant="accent"
-                    icon={<Save size={14} />}
-                    disabled={!profileDirty}
-                  >
-                    Save profile
-                  </Button>
-                </div>
-              </form>
-            </Card>
-          )}
-
-          {/* -------------------------- Security ------------------------- */}
-          {section === 'security' && (
+          {/* -------------------------- Account -------------------------- */}
+          {section === 'account' && (
             <div className="u-stack-16">
-              <Card title="Password" subtitle="Credentials for this administration portal">
+              <Card title="Signed in as" subtitle="Your account in the college registry">
                 <div className="setting-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
                   <div className="setting-row__text">
-                    <p className="setting-row__title">Administrator password</p>
+                    <p className="setting-row__title">{me?.displayName}</p>
                     <p className="setting-row__desc">
-                      Change the password used to sign in. Use at least six characters, and avoid
-                      reusing it elsewhere.
+                      {me?.username} · {me ? ROLE_OPTIONS.find((r) => r.value === me.role)?.label : ''}{' '}
+                      · joined {formatDate(me?.createdAt)}
+                    </p>
+                    <p className="setting-row__desc" style={{ marginTop: 6 }}>
+                      {me ? ROLE_SUMMARY[me.role] : ''}
                     </p>
                   </div>
-                  <Button
-                    variant="secondary"
-                    icon={<KeyRound size={14} />}
-                    onClick={openSecurity}
-                  >
+                  <Badge tone={me?.active ? 'active' : 'inactive'} label={me?.active ? 'Active' : 'Inactive'} />
+                </div>
+              </Card>
+
+              <Card title="Password" subtitle="Your sign-in credential">
+                <div className="setting-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+                  <div className="setting-row__text">
+                    <p className="setting-row__title">Change your password</p>
+                    <p className="setting-row__desc">
+                      Stored as a one-way hash on the server — nobody, including an administrator,
+                      can read it back. Use at least eight characters.
+                    </p>
+                  </div>
+                  <Button variant="secondary" icon={<KeyRound size={14} />} onClick={openPassword}>
                     Change password
                   </Button>
                 </div>
@@ -360,13 +448,173 @@ export function SettingsPage() {
             </div>
           )}
 
+          {/* ---------------------------- Staff --------------------------- */}
+          {section === 'staff' && isAdmin && (
+            <div className="u-stack-16">
+              <Card
+                title="Staff accounts"
+                subtitle="Everyone who can sign in to this portal"
+                actions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<Database size={13} />}
+                    onClick={() => void refreshStaff()}
+                    disabled={staffLoading}
+                  >
+                    {staffLoading ? 'Refreshing…' : 'Refresh'}
+                  </Button>
+                }
+              >
+                {staff.length === 0 ? (
+                  <p className="u-text-subtle" style={{ fontSize: '0.8125rem' }}>
+                    Loading accounts…
+                  </p>
+                ) : (
+                  <div className="table-wrapper">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Username</th>
+                          <th>Role</th>
+                          <th>Status</th>
+                          <th aria-label="Actions" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {staff.map((user) => {
+                          const busy = busyStaffId === user.id
+                          return (
+                            <tr key={user.id}>
+                              <td className="table__primary">{user.displayName}</td>
+                              <td className="u-mono">{user.username}</td>
+                              <td>
+                                <Select
+                                  value={user.role}
+                                  options={ROLE_OPTIONS}
+                                  onChange={(event) =>
+                                    void patchStaff(user, { role: event.target.value as Role })
+                                  }
+                                  disabled={busy}
+                                  aria-label={`Role for ${user.displayName}`}
+                                />
+                              </td>
+                              <td>
+                                <Badge
+                                  tone={user.active ? 'active' : 'inactive'}
+                                  label={user.active ? 'Active' : 'Disabled'}
+                                />
+                              </td>
+                              <td className="table__actions">
+                                <Button
+                                  size="sm"
+                                  onClick={() => void patchStaff(user, { active: !user.active })}
+                                  disabled={busy}
+                                >
+                                  {user.active ? 'Disable' : 'Enable'}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  icon={<KeyRound size={12} />}
+                                  onClick={() => void resetStaffPassword(user)}
+                                  disabled={busy}
+                                >
+                                  Reset password
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  icon={<Trash2 size={12} />}
+                                  onClick={() => setRemoveTarget(user)}
+                                  disabled={busy}
+                                >
+                                  Remove
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p className="u-text-subtle" style={{ fontSize: '0.75rem', marginTop: 12, lineHeight: 1.6 }}>
+                  An administrator cannot remove or demote the last active administrator, and
+                  nobody can remove the account they are signed in with.
+                </p>
+              </Card>
+
+              <Card title="Add a staff account" subtitle="Grant someone access to the registry">
+                <form onSubmit={handleCreateStaff} noValidate>
+                  <div className="form-grid form-grid--2">
+                    <Input
+                      label="Display Name"
+                      value={newDisplayName}
+                      onChange={(event) => setNewDisplayName(event.target.value)}
+                      placeholder="e.g. Hafsa Khan"
+                      error={staffErrors.displayName}
+                      required
+                    />
+                    <Input
+                      label="Username"
+                      value={newUsername}
+                      onChange={(event) => setNewUsername(event.target.value)}
+                      autoComplete="off"
+                      placeholder="e.g. hkhan"
+                      hint="Letters, numbers, dots, dashes and underscores."
+                      error={staffErrors.username}
+                      required
+                    />
+                    <PasswordInput
+                      label="Temporary Password"
+                      value={newPassword2}
+                      onChange={(event) => setNewPassword2(event.target.value)}
+                      autoComplete="new-password"
+                      hint="At least 8 characters. Ask them to change it after signing in."
+                      error={staffErrors.password}
+                      required
+                    />
+                    <Select
+                      label="Role"
+                      value={newRole}
+                      onChange={(event) => setNewRole(event.target.value as Role)}
+                      options={ROLE_OPTIONS}
+                      hint={ROLE_SUMMARY[newRole]}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      gap: 8,
+                      marginTop: 18,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Button
+                      type="submit"
+                      variant="accent"
+                      icon={creatingStaff ? <Save size={14} /> : <Plus size={14} />}
+                      disabled={creatingStaff}
+                    >
+                      {creatingStaff ? 'Creating…' : 'Create account'}
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            </div>
+          )}
+
           {/* ---------------------------- Data --------------------------- */}
           {section === 'data' && (
             <div className="u-stack-16">
-              <Card title="Records" subtitle="What is currently stored in this browser">
+              <Card title="Records" subtitle="What is currently in the database">
                 <div className="setting-row">
                   <div className="setting-row__text">
-                    <p className="setting-row__title">Programs</p>
+                    <p className="setting-row__title">Programmes</p>
                     <p className="setting-row__desc">Programmes available for admission.</p>
                   </div>
                   <span className="badge badge--neutral">{programs.length}</span>
@@ -387,66 +635,52 @@ export function SettingsPage() {
                 </div>
               </Card>
 
-              <Card title="Storage" subtitle="Browser storage used by this application">
-                <div style={{ marginBottom: 14 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      fontSize: '0.75rem',
-                      marginBottom: 6,
-                    }}
-                  >
-                    <span className="u-text-muted">Local storage</span>
-                    <span style={{ fontWeight: 600 }}>
-                      {formatBytes(storageBytes)} of ~5 MB ({usagePercent}%)
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      height: 6,
-                      background: 'var(--paper)',
-                      border: '1px solid var(--line)',
-                      borderRadius: 4,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${Math.max(usagePercent, 1)}%`,
-                        height: '100%',
-                        background:
-                          usagePercent > 80 ? 'var(--danger)' : 'var(--brass-500)',
-                      }}
-                    />
-                  </div>
-                </div>
+              {legacyCount > 0 && (
+                <Card
+                  title="Import from this browser"
+                  subtitle="Records from the previous browser-only version"
+                >
+                  <Alert tone="info" icon={<HardDriveDownload size={15} />} title="One-time import">
+                    {legacyCount} record{legacyCount === 1 ? '' : 's'} from the old localStorage
+                    version {legacyCount === 1 ? 'is' : 'are'} still in this browser, along with any
+                    documents stored in IndexedDB. Importing copies them into the database and then
+                    clears the browser copy.
+                  </Alert>
 
-                <p className="u-text-subtle" style={{ fontSize: '0.75rem', lineHeight: 1.6 }}>
-                  Records are held in this browser only — no data is sent to a server. Uploaded
-                  documents are stored separately in IndexedDB and are not included in the storage
-                  figure above.
-                </p>
-              </Card>
+                  <div className="setting-row" style={{ marginTop: 4 }}>
+                    <div className="setting-row__text">
+                      <p className="setting-row__title">Move browser records into the database</p>
+                      <p className="setting-row__desc">
+                        Records are matched by ID, so anything already imported is updated rather
+                        than duplicated.
+                      </p>
+                    </div>
+                    <Button
+                      variant="accent"
+                      icon={<Upload size={14} />}
+                      onClick={() => void handleMigrate()}
+                      disabled={migrating || !canEdit}
+                    >
+                      {migrating ? 'Importing…' : 'Import now'}
+                    </Button>
+                  </div>
+                </Card>
+              )}
 
-              <Card title="Backup & Restore" subtitle="Export or import your records">
+              <Card title="Backup & Restore" subtitle="Move records in and out of the database">
                 <div className="setting-row">
                   <div className="setting-row__text">
                     <p className="setting-row__title">Export a backup</p>
                     <p className="setting-row__desc">
-                      Downloads programs, applications, students and the college profile as a JSON
-                      file.
+                      Downloads programmes, applications, students and the college profile as a
+                      JSON file. Uploaded document files are not included.
                     </p>
                   </div>
                   <Button
                     variant="secondary"
                     icon={<Download size={14} />}
                     onClick={handleExport}
-                    disabled={
-                      programs.length === 0 &&
-                      applications.length === 0 &&
-                      students.length === 0
-                    }
+                    disabled={recordTotal === 0}
                   >
                     Export
                   </Button>
@@ -456,7 +690,7 @@ export function SettingsPage() {
                   <div className="setting-row__text">
                     <p className="setting-row__title">Import a backup</p>
                     <p className="setting-row__desc">
-                      Restores a previously exported JSON file. Records are merged by ID, so
+                      Restores a previously exported JSON file. Records are matched by ID, so
                       re-importing the same backup will not create duplicates.
                     </p>
                   </div>
@@ -464,9 +698,9 @@ export function SettingsPage() {
                     variant="secondary"
                     icon={<Upload size={14} />}
                     onClick={() => importInputRef.current?.click()}
-                    disabled={importPending}
+                    disabled={importPending || !canEdit}
                   >
-                    {importPending ? 'Reading…' : 'Import'}
+                    {importPending ? 'Importing…' : 'Import'}
                   </Button>
                   <input
                     ref={importInputRef}
@@ -477,7 +711,7 @@ export function SettingsPage() {
                     onChange={(event) => {
                       const file = event.target.files?.[0]
                       event.target.value = ''
-                      if (file) handleImport(file)
+                      if (file) void handleImport(file)
                     }}
                   />
                 </div>
@@ -486,40 +720,56 @@ export function SettingsPage() {
                   <div className="setting-row__text">
                     <p className="setting-row__title">Load sample data</p>
                     <p className="setting-row__desc">
-                      Replaces the current data with a realistic demonstration set so the tables,
-                      filters and dashboard can be reviewed.
+                      Adds a realistic demonstration set so the tables, filters and dashboard can
+                      be reviewed.
                     </p>
                   </div>
-                  <Button variant="secondary" icon={<Database size={14} />} onClick={() => setDemoOpen(true)}>
+                  <Button
+                    variant="secondary"
+                    icon={<Database size={14} />}
+                    onClick={() => setDemoOpen(true)}
+                    disabled={!canEdit}
+                  >
                     Load sample data
                   </Button>
                 </div>
               </Card>
 
-              <Card title="Danger Zone" subtitle="Irreversible actions">
-                <Alert
-                  tone="danger"
-                  icon={<TriangleAlert size={15} />}
-                  title="Clearing all data"
-                  className="no-print"
-                >
-                  Removing all data deletes every program, application, student record and
-                  uploaded document from this browser, and restores the college profile to its
-                  default values. Export a backup first if you may need this information later.
-                </Alert>
+              {isAdmin ? (
+                <Card title="Danger Zone" subtitle="Irreversible actions">
+                  <Alert
+                    tone="danger"
+                    icon={<TriangleAlert size={15} />}
+                    title="Clearing all data"
+                    className="no-print"
+                  >
+                    This deletes every programme, application, student record and uploaded document
+                    from the database and restores the college profile to its defaults. Staff
+                    accounts are kept, so you will stay signed in. Export a backup first if you may
+                    need this information later.
+                  </Alert>
 
-                <div className="setting-row" style={{ marginTop: 4 }}>
-                  <div className="setting-row__text">
-                    <p className="setting-row__title">Clear all data</p>
-                    <p className="setting-row__desc">
-                      Returns the system to a freshly installed state.
-                    </p>
+                  <div className="setting-row" style={{ marginTop: 4 }}>
+                    <div className="setting-row__text">
+                      <p className="setting-row__title">Clear all data</p>
+                      <p className="setting-row__desc">
+                        Returns the academic records to a freshly installed state.
+                      </p>
+                    </div>
+                    <Button
+                      variant="danger"
+                      icon={<Trash2 size={14} />}
+                      onClick={() => setResetOpen(true)}
+                    >
+                      Clear all data
+                    </Button>
                   </div>
-                  <Button variant="danger" icon={<Trash2 size={14} />} onClick={() => setResetOpen(true)}>
-                    Clear all data
-                  </Button>
-                </div>
-              </Card>
+                </Card>
+              ) : (
+                <Alert tone="info" icon={<ShieldCheck size={15} />}>
+                  Only an administrator can clear the database or manage staff accounts.
+                </Alert>
+              )}
             </div>
           )}
         </div>
@@ -527,10 +777,10 @@ export function SettingsPage() {
 
       {/* ---------------------- Change password ---------------------- */}
       <ConfirmDialog
-        open={securityOpen}
+        open={passwordOpen}
         title="Change password"
-        confirmLabel="Update password"
-        onCancel={() => setSecurityOpen(false)}
+        confirmLabel={changingPassword ? 'Updating…' : 'Update password'}
+        onCancel={() => setPasswordOpen(false)}
         onConfirm={() => {
           // Submit the form rendered inside the dialog body.
           passwordFormRef.current?.requestSubmit()
@@ -543,7 +793,7 @@ export function SettingsPage() {
                 value={currentPassword}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 autoComplete="current-password"
-                error={securityErrors.currentPassword}
+                error={passwordErrors.currentPassword}
                 required
               />
               <PasswordInput
@@ -551,8 +801,8 @@ export function SettingsPage() {
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 autoComplete="new-password"
-                hint="At least 6 characters."
-                error={securityErrors.newPassword}
+                hint="At least 8 characters."
+                error={passwordErrors.newPassword}
                 required
               />
               <PasswordInput
@@ -560,7 +810,7 @@ export function SettingsPage() {
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 autoComplete="new-password"
-                error={securityErrors.confirmPassword}
+                error={passwordErrors.confirmPassword}
                 required
               />
             </div>
@@ -568,19 +818,34 @@ export function SettingsPage() {
         }
       />
 
+      {/* ------------------------- Remove staff ----------------------- */}
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title="Remove staff account"
+        destructive
+        confirmLabel="Remove account"
+        message={
+          <>
+            <strong>{removeTarget?.displayName}</strong> ({removeTarget?.username}) will no longer
+            be able to sign in. Applications and other records they created are unaffected.
+          </>
+        }
+        onConfirm={handleRemoveStaff}
+        onCancel={() => setRemoveTarget(null)}
+      />
+
       {/* -------------------------- Reset data ------------------------ */}
       <ConfirmDialog
         open={resetOpen}
         title="Clear all data"
         destructive
-        confirmLabel="Delete everything"
+        confirmLabel={busyData ? 'Deleting…' : 'Delete everything'}
         message={
           <>
             This permanently deletes <strong>{programs.length} programmes</strong>,{' '}
             <strong>{applications.length} applications</strong>,{' '}
-            <strong>{students.length} students</strong> and all uploaded documents from this
-            browser. The college profile will be restored to its defaults and you will stay signed
-            in with your current credentials.
+            <strong>{students.length} students</strong> and all uploaded documents from the
+            database. The college profile will be restored to its defaults. Staff accounts are kept.
           </>
         }
         onConfirm={handleReset}
@@ -591,18 +856,16 @@ export function SettingsPage() {
       <ConfirmDialog
         open={demoOpen}
         title="Load sample data"
-        confirmLabel="Load sample data"
+        confirmLabel={busyData ? 'Loading…' : 'Load sample data'}
         message={
           <>
-            This replaces the current programs, applications and students with a demonstration
-            dataset of {programs.length === 0 ? '' : `${programs.length} programs, `}
-            eight applications and enrolled students. The college profile will also be filled in
-            with example details.
-            {programs.length > 0 && (
+            This adds a demonstration set of programmes, applications and enrolled students, and
+            fills in the college profile with example details.
+            {recordTotal > 0 && (
               <>
                 <br />
                 <br />
-                <strong>Your existing records will be replaced.</strong>
+                <strong>Your existing records will be kept</strong> and merged with the samples.
               </>
             )}
           </>
@@ -620,11 +883,6 @@ export function SettingsPage() {
         </p>
       )}
 
-      <p className="u-text-subtle" style={{ marginTop: 22, fontSize: '0.75rem' }}>
-        Default credentials for a fresh install are{' '}
-        <code style={{ fontFamily: 'var(--font-mono)' }}>{DEFAULT_SETTINGS.admin.username}</code> /{' '}
-        <code style={{ fontFamily: 'var(--font-mono)' }}>{DEFAULT_SETTINGS.admin.password}</code>.
-      </p>
     </>
   )
 }

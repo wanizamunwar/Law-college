@@ -26,7 +26,7 @@ import {
   PROVINCES,
   QUALIFICATION_OPTIONS,
 } from '@/lib/defaults'
-import { putDocument, MAX_DOCUMENT_BYTES } from '@/lib/documentStore'
+import { MAX_DOCUMENT_BYTES } from '@/lib/api'
 import { randomId } from '@/lib/id'
 import { formatBytes } from '@/lib/format'
 
@@ -105,7 +105,10 @@ export function ApplicationFormPage() {
   const navigate = useNavigate()
   const toast = useToast()
 
-  const { programs, applicationById, createApplication, updateApplication } = useStore()
+  const { programs, applicationById, createApplication, updateApplication, uploadDocument, canEdit } =
+    useStore()
+
+  const readOnly = !canEdit
 
   const isEditing = Boolean(id)
   const existing = id ? applicationById(id) : undefined
@@ -343,32 +346,50 @@ export function ApplicationFormPage() {
 
   /* ------------------- Submit ------------------- */
 
-  const persistDocuments = async (): Promise<Application['documents']> => {
+  /**
+   * The metadata set to store on the record.
+   *
+   * File bytes are uploaded separately, after the record exists — a document
+   * id is generated up front so the metadata can be written in the same call
+   * that creates the application.
+   */
+  const buildDocuments = (): Application['documents'] => {
     const output = {} as Application['documents']
 
     for (const label of Object.keys(slots) as DocumentMeta['label'][]) {
-      const slot = slots[label]
-
-      if (slot.file && slot.meta) {
-        const stored = await putDocument(slot.meta.id, slot.file)
-        output[label] = slot.meta
-
-        if (!stored) {
-          // IndexedDB unavailable (private mode / disabled). The record is still
-          // created and the detail view reports the file as unavailable.
-          toast.warning(
-            'Document not stored',
-            `${slot.meta.fileName} could not be saved locally. The record was still created.`,
-          )
-        }
-      } else if (slot.meta) {
-        output[label] = slot.meta
-      } else {
-        output[label] = null
-      }
+      output[label] = slots[label].meta
     }
 
     return output
+  }
+
+  /**
+   * Uploads every newly selected file against a saved application.
+   *
+   * A failure here is reported but does not undo the record: the metadata is
+   * already stored, so the detail view shows the file as unavailable and the
+   * applicant can be asked to re-upload.
+   */
+  const uploadPendingFiles = async (applicationId: string): Promise<void> => {
+    let failures = 0
+
+    for (const label of Object.keys(slots) as DocumentMeta['label'][]) {
+      const slot = slots[label]
+      if (!slot.file || !slot.meta) continue
+
+      try {
+        await uploadDocument(applicationId, label, slot.file)
+      } catch {
+        failures += 1
+      }
+    }
+
+    if (failures > 0) {
+      toast.warning(
+        'Some documents were not saved',
+        `${failures} file${failures === 1 ? '' : 's'} could not be uploaded. The record was saved — re-open it to try again.`,
+      )
+    }
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -386,9 +407,6 @@ export function ApplicationFormPage() {
     setSubmitting(true)
 
     try {
-      const documents = await persistDocuments()
-      const timestamp = new Date().toISOString()
-
       const payload = {
         personal: {
           fullName: form.fullName.trim(),
@@ -414,17 +432,19 @@ export function ApplicationFormPage() {
           province: form.province,
           postalCode: form.postalCode.trim(),
         },
-        documents,
+        documents: buildDocuments(),
       }
 
       if (existing) {
-        updateApplication(existing.id, { ...payload, updatedAt: timestamp })
+        await updateApplication(existing.id, payload)
+        await uploadPendingFiles(existing.id)
         toast.success('Application updated', `${payload.personal.fullName}'s record was saved.`)
         navigate('/admissions')
         return
       }
 
-      const created = createApplication(payload)
+      const created = await createApplication(payload)
+      await uploadPendingFiles(created.id)
       setSavedApplication(created)
       setSuccessOpen(true)
       toast.success('Application submitted', `ID ${created.applicationNo} has been assigned.`)
@@ -475,6 +495,19 @@ export function ApplicationFormPage() {
       />
 
       <form onSubmit={handleSubmit} noValidate>
+        {readOnly && (
+          <div style={{ marginBottom: 16 }}>
+            <Alert
+              tone="info"
+              icon={<TriangleAlert size={15} />}
+              title="Read-only access"
+            >
+              Your account can view applications but cannot create or change them. Ask an
+              administrator for a registrar or admin role to record applications.
+            </Alert>
+          </div>
+        )}
+
         {errorList.length > 0 && (
           <div ref={errorSummaryRef} tabIndex={-1} style={{ marginBottom: 16 }}>
             <Alert
@@ -729,7 +762,8 @@ export function ApplicationFormPage() {
 
             <p className="u-text-subtle" style={{ marginTop: 14, fontSize: '0.75rem' }}>
               Accepted formats: JPG, PNG, WEBP and PDF · Maximum{' '}
-              {formatBytes(MAX_DOCUMENT_BYTES)} per file. Documents are stored in this browser only.
+              {formatBytes(MAX_DOCUMENT_BYTES)} per file. Files are uploaded to the college
+              database and stored with the application.
             </p>
           </Card>
 
@@ -745,19 +779,21 @@ export function ApplicationFormPage() {
               onClick={() => navigate('/admissions')}
               disabled={submitting}
             >
-              Cancel
+              {readOnly ? 'Back' : 'Cancel'}
             </Button>
             <Button
               type="submit"
               variant="accent"
               icon={isEditing ? <Save size={14} /> : <Send size={14} />}
-              disabled={submitting}
+              disabled={submitting || readOnly}
             >
               {submitting
                 ? 'Saving…'
-                : isEditing
-                  ? 'Save changes'
-                  : 'Submit application'}
+                : readOnly
+                  ? 'Read-only'
+                  : isEditing
+                    ? 'Save changes'
+                    : 'Submit application'}
             </Button>
           </div>
         </div>

@@ -49,7 +49,7 @@ const DURATION_OPTIONS = [
 ]
 
 export function ProgramsPage() {
-  const { programs, createProgram, updateProgram, deleteProgram, students, applications } =
+  const { programs, createProgram, updateProgram, deleteProgram, students, applications, canEdit } =
     useStore()
   const toast = useToast()
 
@@ -62,6 +62,8 @@ export function ProgramsPage() {
   const [errors, setErrors] = useState<Partial<Record<keyof ProgramFormState, string>>>({})
 
   const [deleteTarget, setDeleteTarget] = useState<Program | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -131,7 +133,7 @@ export function ProgramsPage() {
     return Object.keys(next).length === 0
   }
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!validate()) return
 
@@ -143,23 +145,42 @@ export function ProgramsPage() {
       admissionOpen: form.admissionOpen,
     }
 
-    if (editing) {
-      updateProgram(editing.id, payload)
-      toast.success('Programme updated', `${payload.name} has been saved.`)
-    } else {
-      createProgram(payload)
-      toast.success('Programme added', `${payload.name} is now available for admissions.`)
+    setSaving(true)
+    try {
+      if (editing) {
+        await updateProgram(editing.id, payload)
+        toast.success('Programme updated', `${payload.name} has been saved.`)
+      } else {
+        await createProgram(payload)
+        toast.success('Programme added', `${payload.name} is now available for admissions.`)
+      }
+      closeForm()
+    } catch (error) {
+      toast.error(
+        'Could not save the programme',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setSaving(false)
     }
-
-    closeForm()
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return
     const name = deleteTarget.name
-    deleteProgram(deleteTarget.id)
-    setDeleteTarget(null)
-    toast.success('Programme deleted', `${name} has been removed.`)
+    setDeleting(true)
+    try {
+      await deleteProgram(deleteTarget.id)
+      setDeleteTarget(null)
+      toast.success('Programme deleted', `${name} has been removed.`)
+    } catch (error) {
+      toast.error(
+        'Could not delete the programme',
+        error instanceof Error ? error.message : 'An unexpected error occurred.',
+      )
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const usage = deleteTarget ? usageFor(deleteTarget.id) : null
@@ -170,9 +191,11 @@ export function ProgramsPage() {
         title="Programs"
         description="Define the programmes offered by the college. Programmes marked open accept new admission applications."
         actions={
-          <Button variant="accent" icon={<Plus size={14} />} onClick={openCreate}>
-            Add Program
-          </Button>
+          canEdit ? (
+            <Button variant="accent" icon={<Plus size={14} />} onClick={openCreate}>
+              Add Program
+            </Button>
+          ) : undefined
         }
       />
 
@@ -211,9 +234,11 @@ export function ProgramsPage() {
             title="No programmes defined"
             message="Add the programmes offered by the college. Each programme becomes selectable on the admission form and is required before applications can be recorded."
             action={
-              <Button variant="accent" icon={<Plus size={14} />} onClick={openCreate}>
-                Add your first program
-              </Button>
+              canEdit ? (
+                <Button variant="accent" icon={<Plus size={14} />} onClick={openCreate}>
+                  Add your first program
+                </Button>
+              ) : undefined
             }
           />
         </Card>
@@ -274,24 +299,26 @@ export function ProgramsPage() {
                     </span>
                   </div>
 
-                  <div className="program-card__actions">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<Pencil size={13} />}
-                      onClick={() => openEdit(program)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon={<Trash2 size={13} />}
-                      onClick={() => setDeleteTarget(program)}
-                    >
-                      Delete
-                    </Button>
-                  </div>
+                  {canEdit && (
+                    <div className="program-card__actions">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Pencil size={13} />}
+                        onClick={() => openEdit(program)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={<Trash2 size={13} />}
+                        onClick={() => setDeleteTarget(program)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  )}
                 </article>
               )
             })}
@@ -310,8 +337,8 @@ export function ProgramsPage() {
         footer={
           <>
             <Button onClick={closeForm}>Cancel</Button>
-            <Button variant="primary" type="submit" form="program-form">
-              {editing ? 'Save changes' : 'Add program'}
+            <Button variant="primary" type="submit" form="program-form" disabled={saving}>
+              {saving ? 'Saving…' : editing ? 'Save changes' : 'Add program'}
             </Button>
           </>
         }
@@ -386,7 +413,7 @@ export function ProgramsPage() {
         open={deleteTarget !== null}
         title="Delete programme"
         destructive
-        confirmLabel="Delete programme"
+        confirmLabel={deleting ? 'Deleting…' : 'Delete programme'}
         message={
           <>
             <strong>{deleteTarget?.name}</strong> will be removed from the college. This action

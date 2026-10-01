@@ -29,3 +29,9 @@ Thumbs.db
 
 *.tsbuildinfo
 .vite
+
+# The API is bundled by Vercel, never compiled in place. A stray emitted .js
+# beside a .ts source shadows it in Vite's resolver and breaks `npm run dev`.
+api/**/*.js
+api/**/*.d.ts
+api/**/*.js.map

@@ -2783,6 +2783,60 @@ table {
 }
 
 /* ==================================================================
+   Boot — loading and outage screens
+   ================================================================== */
+
+.boot {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.boot__panel {
+  width: 100%;
+  max-width: 460px;
+  text-align: center;
+}
+
+/* The loading variant has no card, so the panel is transparent. */
+.boot__panel > .boot__mark {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--brass-500);
+}
+
+.boot__title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+.boot__note {
+  font-size: 0.8125rem;
+  color: var(--text-subtle);
+  margin-top: 5px;
+}
+
+.boot__panel > .card {
+  text-align: left;
+}
+
+/* The outage screen is a real card, so it should not repeat the mark. */
+.boot__panel .page__header {
+  text-align: left;
+  margin-bottom: 14px;
+}
+
+/* ==================================================================
    Print — application & student records
    ================================================================== */
 

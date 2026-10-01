@@ -3,44 +3,99 @@
 A professional administration portal for a law college. Covers admissions, the
 student register, programmes, the institutional profile and its location.
 
-Built with React, TypeScript and Vite. Runs entirely in the browser — no server,
-no API keys, no external services required.
+Built with React, TypeScript and Vite, backed by PostgreSQL on
+[Neon](https://neon.tech) through serverless API functions. Records, uploaded
+documents and staff accounts live in the database, so the portal works from any
+device and survives clearing browser data.
 
-## Getting started
+## Setup
+
+### 1. Create the database
+
+Sign up for Neon and create a project. Neon gives you a pooled connection string
+immediately — copy it from **Connection Details** and keep it handy.
+
+### 2. Configure the environment
+
+```bash
+cp .env.example .env.local
+```
+
+Fill in `DATABASE_URL` with the string Neon gave you, and set `SESSION_SECRET` to
+a long random value:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+`DATABASE_URL` must never be exposed to the browser. Only `SESSION_SECRET` and
+`DATABASE_URL` are read, and both stay in the serverless functions — never prefix
+them with `VITE_`.
+
+### 3. Create the tables
 
 ```bash
 npm install
+npm run db:migrate
+```
+
+This applies `db/schema.sql` and creates the first administrator. Every statement
+is guarded, so re-running it is safe.
+
+### 4. Run it
+
+```bash
 npm run dev
 ```
 
-Open http://localhost:5173 and sign in with:
+Open http://localhost:5173 and sign in with the credentials you set in
+`.env.local` — `admin` / `admin123` by default. **Change this password
+immediately** from **Settings → My Account**.
 
-| Username | Password   |
-| -------- | ---------- |
-| `admin`  | `admin123` |
-
-Change the password from **Settings → Security** after your first sign-in.
+The dev server mounts the same API handler that Vercel runs, so `npm run dev`
+talks to the real database without the Vercel CLI.
 
 ### Other scripts
 
 ```bash
-npm run build      # type-check and build for production
-npm run preview    # serve the production build locally
+npm run build       # type-check and build for production
+npm run preview     # serve the production build locally
+npm run db:migrate  # apply schema.sql and seed the first administrator
 ```
 
 ## Pages
 
-| Page                 | Purpose                                                           |
-| -------------------- | ----------------------------------------------------------------- |
-| **Login**            | Credential sign-in for the registrar account.                      |
-| **Dashboard**         | Student, application and programme counts, plus recent submissions. |
-| **Admissions**        | Application register with search, filters, and approve/reject.      |
-| **Application form**  | Four-section guided form with validation and document uploads.     |
-| **Students**          | The official student register with full CRUD.                        |
-| **Programs**          | Programme management — add, edit, delete. Not hard-coded.            |
-| **College Information** | Institution profile, logo and office hours.                       |
-| **College Location**  | Address, coordinates, embedded map and directions.                   |
-| **Settings**          | Administrator profile, password, backup and local data management.  |
+| Page                   | Purpose                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| **Login**              | Credential sign-in for a staff account.                            |
+| **Dashboard**          | Student, application and programme counts, plus recent submissions. |
+| **Admissions**         | Application register with search, filters, and approve/reject.      |
+| **Application form**   | Four-section guided form with validation and document uploads.      |
+| **Students**           | The official student register with full CRUD.                        |
+| **Programs**           | Programme management — add, edit, delete. Not hard-coded.            |
+| **College Information** | Institution profile, logo and office hours.                          |
+| **College Location**   | Address, coordinates, embedded map and directions.                   |
+| **Settings**           | Your account, staff access, backup and database management.          |
+
+## Staff accounts and roles
+
+Every person who signs in has a database-backed account. The first one is created
+by `npm run db:migrate`; administrators add and change the rest from
+**Settings → Staff**.
+
+| Role          | Access                                                                |
+| ------------- | --------------------------------------------------------------------- |
+| `admin`       | Everything, including staff accounts and clearing the database.        |
+| `registrar`   | Full read/write on all academic records.                              |
+| `viewer`      | Read-only. Mutating controls are hidden rather than shown and failing. |
+
+Passwords are stored as scrypt hashes — nobody, including an administrator, can
+read one back. Sessions are HMAC-signed tokens that expire after eight hours, and
+the account is re-checked on every request, so deactivating someone takes effect
+immediately rather than when their token lapses.
+
+The last active administrator cannot be deleted, demoted or disabled, and nobody
+can delete the account they are signed in with.
 
 ## How it works
 
@@ -48,49 +103,57 @@ npm run preview    # serve the production build locally
 own from the Programs page. An application cannot be submitted until at least one
 programme exists.
 
-**Application IDs** are generated on submit in the format `LCM-2026-0001`, and
-student IDs as `STU-2026-0001`. Numbering is sequential and resumes automatically
-after deleting a record.
+**Application IDs** are generated by the database in the format `LCM-2026-0001`,
+and student IDs as `STU-2026-0001`. The counter lives in Postgres, so two
+submissions at the same moment cannot collide and numbering resumes after a
+deletion.
 
 **Approving an application does not create a student automatically.** Once
 approved, the application row gains an enrol action that generates the student
 record with the applicant's details pre-filled. This keeps the decision and the
-enrolment as two explicit, auditable steps.
+enrolment as two explicit, auditable steps, and a unique index makes a
+double-click unable to enrol the same applicant twice.
 
 **Documents** — photograph, CNIC copy, academic certificate and marks sheet. The
-photograph is required; the rest are optional. Files are stored as blobs in
-IndexedDB, so they open and download for real rather than as placeholders.
+photograph is required; the rest are optional. File bytes are stored in a
+`bytea` column and served back through the API, so they open and download for
+real. The limit is 3 MB per file, which keeps requests inside Vercel's 4.5 MB
+body ceiling.
 
 **Validation** covers CNIC format, Pakistani mobile numbers, email, postal code,
-percentage range, marks sheet year limits, a 16-year minimum age, and coordinate
+percentage range, passing year limits, a 16-year minimum age, and coordinate
 ranges. Errors appear inline beneath each field and are summarised at the top of
 the form on a failed submit.
 
-## Storage
+## Moving data in
 
-Records live in `localStorage`; documents live in `IndexedDB`. Everything is local
-to the browser — clearing site data removes all records.
+**Settings → Data** covers everything:
 
-**Settings → Data & Storage** offers a JSON export and import (merged by ID, so
-re-importing will not duplicate records), a sample-data loader for reviewing the
-interface with realistic content, and a full reset.
-
-## Sample data
-
-New installs start empty by design. To review the tables, filters and dashboard
-with content, use **Settings → Data & Storage → Load sample data**, which
-installs four programmes, eight applications across all three statuses, and three
-enrolled students.
+- **Import from this browser** — one-time migration of records left by the
+  earlier localStorage version, including documents from IndexedDB. Matching is
+  by ID, so re-running updates rather than duplicates, and the browser copy is
+  cleared once the import succeeds.
+- **Export / import backup** — JSON of programmes, applications, students and the
+  college profile. Uploaded files are not included in the export.
+- **Load sample data** — a demonstration set for reviewing the tables, filters
+  and dashboard. Merged with existing records, not a replacement.
+- **Clear all data** — administrator only. Removes all academic records and
+  documents; staff accounts are kept.
 
 ## Project structure
 
 ```
+api/
+├── [...path].ts        Vercel entry — one handler for every route
+└── _lib/               db, auth, routing, route handlers
+db/schema.sql           Authoritative table definitions
+scripts/                Migration runner and password hasher
 src/
 ├── components/
 │   ├── applications/   Application detail view
 │   ├── layout/         Sidebar, top bar, app shell
 │   └── ui/             Button, form, card, modal, toast, upload primitives
-├── lib/                Storage, validation, repository, formatting, demo data
+├── lib/                API client, validation, formatting, demo data
 ├── pages/              One file per route
 ├── store/              Central state and all write operations
 ├── styles/index.css    Design tokens and all component styles
@@ -98,7 +161,25 @@ src/
 ```
 
 Write operations live in `src/store/StoreContext.tsx`; pages read state and call
-actions. Field rules sit beside the form that uses them, not in a separate schema.
+actions. Field rules sit beside the form that uses them, not in a separate
+schema.
+
+## Deploying to Vercel
+
+Push the repository and import it into Vercel — the framework preset is detected
+automatically. Then add two environment variables under **Settings →
+Environment Variables**:
+
+| Variable          | Value                                     |
+| ----------------- | ----------------------------------------- |
+| `DATABASE_URL`    | The Neon connection string                |
+| `SESSION_SECRET`  | The same value used locally, 32+ chars    |
+
+Run `npm run db:migrate` once from a machine with the same `DATABASE_URL` before
+your first deploy, or paste `db/schema.sql` into the Neon SQL editor.
+
+`vercel.json` routes everything except `/api/*` to the SPA, so client-side routes
+such as `/admissions` survive a page reload.
 
 ## Design
 
@@ -107,10 +188,10 @@ display headings. No gradients, glassmorphism or neon. Small corner radii, thin
 borders, subtle shadows, one accent colour reserved for the primary action.
 
 Responsive down to mobile, where the sidebar collapses to a drawer and tables
-scroll horizontally. Application records have a print stylesheet. `prefers-reduced-motion`
-is respected.
+scroll horizontally. Application records have a print stylesheet.
+`prefers-reduced-motion` is respected.
 
 ## Browser support
 
-Current Chrome, Edge, Firefox and Safari. Requires IndexedDB for document uploads;
-when unavailable, the record still saves and the file is reported as unavailable.
+Current Chrome, Edge, Firefox and Safari. Document upload needs `File` and
+`fetch` with a `Blob` body, which all current browsers support.

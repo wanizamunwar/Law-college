@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { FileText, ImageIcon, Paperclip, Trash2, Upload } from 'lucide-react'
 import { formatBytes } from '@/lib/format'
-import { MAX_DOCUMENT_BYTES } from '@/lib/documentStore'
+import { MAX_DOCUMENT_BYTES } from '@/lib/api'
 
 interface FileUploadProps {
   label: string

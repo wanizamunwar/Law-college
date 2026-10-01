@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { AlertCircle, Check, FileText, GraduationCap, ScrollText, Users } from 'lucide-react'
+import { AlertCircle, FileText, GraduationCap, ScrollText, Users } from 'lucide-react'
 import { useStore } from '@/store/StoreContext'
 import { Button } from '@/components/ui/Button'
 import { PasswordInput, Input } from '@/components/ui/Form'
@@ -14,7 +14,7 @@ const FEATURES = [
 ]
 
 export function LoginPage() {
-  const { session, signIn, settings } = useStore()
+  const { me, signIn, settings, status } = useStore()
   const navigate = useNavigate()
 
   const [username, setUsername] = useState('')
@@ -22,13 +22,13 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  if (session) {
+  if (me) {
     return <Navigate to="/dashboard" replace />
   }
 
   const collegeName = settings.college.shortName || settings.college.name || 'Law College'
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError(null)
 
@@ -38,7 +38,7 @@ export function LoginPage() {
     }
 
     setSubmitting(true)
-    const result = signIn(username, password)
+    const result = await signIn(username, password)
 
     if (result.ok) {
       navigate('/dashboard', { replace: true })
@@ -48,12 +48,6 @@ export function LoginPage() {
     setSubmitting(false)
     setError(result.message ?? 'Sign in failed. Please try again.')
     setPassword('')
-  }
-
-  const fillDemo = () => {
-    setUsername(settings.admin.username)
-    setPassword(settings.admin.password)
-    setError(null)
   }
 
   return (
@@ -100,7 +94,7 @@ export function LoginPage() {
         <div className="login__panel">
           <h2 className="login__title">Sign in</h2>
           <p className="login__subtitle">
-            Enter your administrator credentials to continue.
+            Enter your staff credentials to continue.
           </p>
 
           <form className="login__form" onSubmit={handleSubmit} noValidate>
@@ -135,27 +129,19 @@ export function LoginPage() {
               size="lg"
               block
               className="login__submit"
-              disabled={submitting}
+              disabled={submitting || status === 'loading'}
             >
               {submitting ? 'Signing in…' : 'Sign in'}
             </Button>
           </form>
 
           <div className="login__hint">
-            <strong>Demo access</strong>
+            <strong>First time here?</strong>
             <br />
-            Username <code>{settings.admin.username}</code> · Password{' '}
-            <code>{settings.admin.password}</code>
-            <br />
-            <button
-              type="button"
-              onClick={fillDemo}
-              className="text-link"
-              style={{ background: 'none', padding: 0, marginTop: 6 }}
-            >
-              <Check size={11} style={{ display: 'inline', verticalAlign: '-1px', marginRight: 3 }} />
-              Fill in the demo credentials
-            </button>
+            Sign in with the administrator account created by{' '}
+            <code>npm run db:migrate</code>, then add your colleagues under{' '}
+            <strong>Settings → Staff</strong>. Each account can be a registrar (full access) or a
+            viewer (read-only).
           </div>
         </div>
       </main>

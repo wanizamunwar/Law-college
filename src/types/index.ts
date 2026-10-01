@@ -41,7 +41,7 @@ export interface AddressInfo {
   postalCode: string
 }
 
-/** Metadata for an uploaded document. Binary content lives in IndexedDB. */
+/** Metadata for an uploaded document. The bytes are stored in Postgres. */
 export interface DocumentMeta {
   id: string
   label: 'photograph' | 'cnic' | 'academicCertificate' | 'marksSheet'
@@ -125,15 +125,27 @@ export interface CollegeProfile {
   longitude: string
 }
 
-export interface AdminUser {
+/**
+ * Access level of a staff account.
+ *
+ *   admin     — manages staff accounts and every record
+ *   registrar — full read/write on all records
+ *   viewer    — read-only
+ */
+export type Role = 'admin' | 'registrar' | 'viewer'
+
+/** A member of staff. Passwords never leave the server. */
+export interface StaffUser {
+  id: string
   username: string
   displayName: string
-  password: string
+  role: Role
+  active: boolean
+  createdAt: string
 }
 
 export interface AppSettings {
   college: CollegeProfile
-  admin: AdminUser
 }
 
 export interface SeedData {
