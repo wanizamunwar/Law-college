@@ -48,9 +48,10 @@ is guarded, so re-running it is safe.
 npm run dev
 ```
 
-Open http://localhost:5173 and sign in with the credentials you set in
-`.env.local` — `admin` / `admin123` by default. **Change this password
-immediately** from **Settings → My Account**.
+Open http://localhost:5173 and sign in as `admin`. `npm run db:migrate` prints the
+password it created — copy it out then, because only its hash is stored. If
+`ADMIN_PASSWORD` was set in `.env.local` the password is that value instead.
+**Change this password immediately** from **Settings → My Account**.
 
 The dev server mounts the same API handler that Vercel runs, so `npm run dev`
 talks to the real database without the Vercel CLI. Edits under `api/` are picked
@@ -64,10 +65,41 @@ message means nothing is serving the routes.
 ### Other scripts
 
 ```bash
-npm run build       # type-check and build for production
-npm run preview     # serve the production build locally, API included
-npm run db:migrate  # apply schema.sql and seed the first administrator
+npm run build              # type-check and build for production
+npm run preview            # serve the production build locally, API included
+npm run db:migrate         # apply schema.sql and seed the first administrator
+npm run db:reset-password  # set a new password for an existing staff account
 ```
+
+### Forgotten password
+
+`npm run db:migrate` never touches an account that already exists, so it cannot
+recover a lost password. Use the reset script instead:
+
+```bash
+npm run db:reset-password                          # admin, or ADMIN_USERNAME
+npm run db:reset-password -- --username registrar1 # any other account
+```
+
+The password comes from the `ADMIN_PASSWORD` environment variable — set it in
+`.env.local`, or for a single run:
+
+```bash
+ADMIN_PASSWORD="the-new-password" npm run db:reset-password   # macOS / Linux
+$env:ADMIN_PASSWORD = "the-new-password"; npm run db:reset-password  # PowerShell
+```
+
+With neither set, a strong password is generated and printed once.
+
+It is deliberately not accepted as a command-line flag, because a flag is kept
+in shell history and is readable by every other process on the machine. The
+value is hashed with the same scrypt scheme as every other credential, written
+to that one account only, and read back and verified before the script reports
+success. No account is created or deleted, no role or access level changes, and
+the schema is untouched.
+
+Signing in still needs `DATABASE_URL`, so run this on a machine that has it —
+the same one as `npm run db:migrate`.
 
 ## Pages
 
@@ -96,9 +128,11 @@ by `npm run db:migrate`; administrators add and change the rest from
 | `viewer`      | Read-only. Mutating controls are hidden rather than shown and failing. |
 
 Passwords are stored as scrypt hashes — nobody, including an administrator, can
-read one back. Sessions are HMAC-signed tokens that expire after eight hours, and
-the account is re-checked on every request, so deactivating someone takes effect
-immediately rather than when their token lapses.
+read one back. There is no default password in this repository: the first
+account gets a generated one, and a lost credential is replaced with
+`npm run db:reset-password`. Sessions are HMAC-signed tokens that expire after
+eight hours, and the account is re-checked on every request, so deactivating
+someone takes effect immediately rather than when their token lapses.
 
 The last active administrator cannot be deleted, demoted or disabled, and nobody
 can delete the account they are signed in with.
@@ -156,7 +190,7 @@ api/                      One file per Vercel route; each re-exports the handler
 └── _lib/                 db, auth, routing, route handlers
 server/handler.ts         The API handler itself, shared by dev and Vercel
 db/schema.sql             Authoritative table definitions
-scripts/                  Migration runner and password hasher
+scripts/                  Migration, password reset, hashing and env loading
 src/
 ├── components/
 │   ├── applications/   Application detail view

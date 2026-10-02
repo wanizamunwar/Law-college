@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "check:routes": "node scripts/check-routes.mjs",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:reset-password": "node scripts/reset-password.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

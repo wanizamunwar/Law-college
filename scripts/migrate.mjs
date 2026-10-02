@@ -6,63 +6,24 @@
  *
  * Reads DATABASE_URL from the environment or from .env.local.
  * Both steps are idempotent — re-running is safe.
+ *
+ * Existing staff accounts are never touched, so this is not the way to recover
+ * a lost password. Use `npm run db:reset-password` for that.
  */
 
-import { readFileSync, existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { neon } from '@neondatabase/serverless'
-import { hashPassword } from './hash-password.mjs'
+import { hashPassword, generatePassword } from './hash-password.mjs'
+import { loadEnvFile, projectRoot, requireDatabaseUrl } from './load-env.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const root = join(here, '..')
+const root = projectRoot
 
-/* --------------------------- .env.local loader --------------------------- */
-
-function readEnvFile() {
-  for (const name of ['.env.local', '.env']) {
-    const path = join(root, name)
-    if (!existsSync(path)) continue
-
-    for (const rawLine of readFileSync(path, 'utf8').split(/\r?\n/)) {
-      const line = rawLine.trim()
-      if (!line || line.startsWith('#')) continue
-
-      const separator = line.indexOf('=')
-      if (separator === -1) continue
-
-      const key = line.slice(0, separator).trim()
-      let value = line.slice(separator + 1).trim()
-
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1)
-      }
-
-      if (key && !(key in process.env)) process.env[key] = value
-    }
-  }
-}
-
-readEnvFile()
+loadEnvFile()
 
 /* --------------------------------- run ---------------------------------- */
 
-const connectionString = process.env.DATABASE_URL
-
-if (!connectionString) {
-  console.error(
-    '\n  DATABASE_URL is not set.\n\n' +
-      '  Create .env.local in the project root and add your Neon connection string:\n\n' +
-      '    DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/lawcollege?sslmode=require"\n' +
-      '    SESSION_SECRET="<any long random string>"\n',
-  )
-  process.exit(1)
-}
-
-const sql = neon(connectionString)
+const sql = neon(requireDatabaseUrl())
 
 /**
  * The HTTP driver runs one statement per round trip and cannot open a
@@ -101,9 +62,15 @@ const [{ count }] = await sql.query('select count(*)::int as count from staff_us
 
 if (count > 0) {
   console.log(`  ✓ ${count} staff account${count === 1 ? '' : 's'} already exist — left untouched`)
+  console.log('    Forgotten a password? Run: npm run db:reset-password')
 } else {
   const username = process.env.ADMIN_USERNAME || 'admin'
-  const password = process.env.ADMIN_PASSWORD || 'admin123'
+
+  // A configured password is used as given; otherwise one is generated. There is
+  // deliberately no hard-coded default — a password committed to this
+  // repository is a password on every clone of it.
+  const configured = process.env.ADMIN_PASSWORD
+  const password = configured || generatePassword()
 
   await sql.query(
     `insert into staff_users (username, display_name, role, password_hash)
@@ -111,7 +78,13 @@ if (count > 0) {
     [username, 'Registrar', await hashPassword(password)],
   )
 
-  console.log(`  ✓ Created the first administrator — ${username} / ${password}`)
+  console.log(`  ✓ Created the first administrator — ${username}`)
+  if (configured) {
+    console.log('    Password taken from ADMIN_PASSWORD in your environment.')
+  } else {
+    console.log('    New password (shown once, not stored anywhere):')
+    console.log(`      ${password}`)
+  }
   console.log('    Change this password from Settings after your first sign-in.')
 }
 
